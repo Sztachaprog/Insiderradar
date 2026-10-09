@@ -55,7 +55,7 @@ def scan(only: set[str], force_whales: bool):
                              xtb_factory=xtb.XtbClient)
     scanner = webapp.Scanner(store, lambda: fs.SecClient(ua), webapp.SCAN_PAGES, after_scan=tracker.refresh)
     cscanner = crypto.CryptoScanner(cstore, crypto.CoinGeckoClient, news_factory=news.NewsClient)
-    wscanner = whales.WhaleScanner(wstore, whales.BlockscoutClient)
+    wscanner = whales.WhaleScanner(wstore, whales.client_for)
 
     if "stocks" in only:
         if ua:

@@ -49,6 +49,7 @@ Ustawienia przez zmienne środowiskowe:
 | `WHALE_INTERVAL_MIN` | `30` | co ile minut skanować portfele wielorybów |
 | `WHALE_TOKENS` / `WHALE_MIN_USD` | `150` / `1e6` | ile tokenów przeglądać i od jakiej kwoty portfel jest wielorybem |
 | `BLOCKSCOUT_API_KEY` | brak | darmowy klucz z dev.blockscout.com: wieloryby także na Arbitrum i Optimism (Base i Polygon tylko w płatnym planie, `WHALE_CHAINS`) |
+| `HELIUS_API_KEY` | brak | darmowy klucz z dashboard.helius.dev: wieloryby na Solanie (lista tokenów z Jupiter, posiadacze i transakcje z Helius) |
 | `COINGECKO_API_KEY` | brak | darmowy klucz „Demo” z CoinGecko przyspiesza skan (bez klucza około 3–4 min) |
 
 ### Linia komend
@@ -108,5 +109,6 @@ pip install pytest; pytest -q
 - SEC limituje ruch do 10 zapytań na sekundę, skaner robi przerwy między zapytaniami.
 - Aplikacja skanuje tylko wtedy, gdy działa `python app.py` (zamknięta karta przeglądarki nie przeszkadza). Przerwy w cenach krypto uzupełnia historia godzinowa z CoinGecko, a w cenach akcji notowania dzienne z Yahoo.
 - Ceny i profile pochodzą z nieoficjalnego API Yahoo Finance. Jeśli Yahoo coś zmieni, skanowanie Form 4 działa dalej, tylko bez cen.
+- Na Solanie nie ma darmowych etykiet giełd: portfel, który jest wśród największych posiadaczy wielu tokenów naraz, jest traktowany jako giełda / custody i ukrywany. Pule DEX (adresy programów) są odfiltrowane.
 - Wieloryby działają na Ethereum (bez klucza) oraz na Arbitrum i Optimism (z darmowym kluczem Blockscout). Base i Polygon od 1.10.2026 są tylko w płatnym planie Blockscout, a Solana i BSC wymagają innych API. Pierwszy skan trwa ~7 min, a pełne pokrycie listy tokenów ~3 h.
 - Ocena sygnału to heurystyka. Przed decyzją przeczytaj powody i przypisy.

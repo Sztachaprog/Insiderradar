@@ -615,7 +615,7 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         scanner = Scanner(store, lambda: fs.SecClient(ua), SCAN_PAGES, after_scan=tracker.refresh)
     wstore = whale_store or whales.WhaleStore(store.path)
     if whale_scanner is None:
-        whale_scanner = whales.WhaleScanner(wstore, whales.BlockscoutClient)
+        whale_scanner = whales.WhaleScanner(wstore, whales.client_for)
     if crypto_scanner is None:
         crypto_scanner = crypto.CryptoScanner(cstore, crypto.CoinGeckoClient, news_factory=news.NewsClient)
     if start_background:
@@ -847,7 +847,7 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
 
     @app.get("/wieloryby/portfel/<address>")
     def whale_wallet(address):
-        address = address.lower()
+        address = whales.norm(address)
         data = whales.build(wstore, include_treasury=True)
         w = next((x for x in data["whales"] if x["address"] == address), None)
         if w is None:
@@ -861,10 +861,10 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
     @app.post("/wieloryby/dodaj")
     def whale_add():
         address = (request.form.get("address") or "").strip()
-        if not re.fullmatch(r"0x[0-9a-fA-F]{40}", address):
-            return redirect(url_for("whales_index", error="Niepoprawny adres. Podaj adres Ethereum w formacie 0x…"))
+        if not re.fullmatch(r"0x[0-9a-fA-F]{40}|[1-9A-HJ-NP-Za-km-z]{32,44}", address):
+            return redirect(url_for("whales_index", error="Niepoprawny adres. Podaj adres EVM (0x…) albo Solany."))
         whale_scanner.add_wallet(address, (request.form.get("label") or "").strip()[:60])
-        return redirect(url_for("whale_wallet", address=address.lower()))
+        return redirect(url_for("whale_wallet", address=whales.norm(address)))
 
     @app.post("/wieloryby/<address>/usun")
     def whale_delete(address):

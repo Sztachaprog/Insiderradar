@@ -37,7 +37,13 @@ CHAINS = {
     "arbitrum": {"id": 42161, "label": "Arbitrum", "explorer": "https://arbiscan.io"},
     "optimism": {"id": 10, "label": "Optimism", "explorer": "https://optimistic.etherscan.io"},
     "polygon": {"id": 137, "label": "Polygon", "explorer": "https://polygonscan.com", "paid": True},
+    "solana": {"label": "Solana", "explorer": "https://solscan.io", "helius": True},
 }
+HIDDEN_KINDS = {"treasury", "custody"}   # team/vesting wallets and exchange-like custody: not traders
+CUSTODY_TOKENS = 8                       # a Solana wallet in the top holders of this many tokens = exchange/custody
+SOLANA_UNIVERSE = int(os.environ.get("WHALE_SOLANA_TOKENS", "80"))
+SOLANA_HOLDERS = int(os.environ.get("WHALE_SOLANA_HOLDERS_PER_RUN", "10"))
+SOLANA_TRANSFERS = int(os.environ.get("WHALE_SOLANA_TRANSFERS_PER_RUN", "5"))   # 100 Helius credits each
 CHAIN = "ethereum"
 PUBLIC_ETH = "https://eth.blockscout.com/api/v2"      # free, no key; keeps PRO credits for the other chains
 PRO_API = "https://api.blockscout.com/{id}/api/v2"
@@ -75,14 +81,32 @@ FREE_TIER = [c for c, info in CHAINS.items() if not info.get("paid")]
 
 
 def active_chains() -> list[str]:
-    """Ethereum always; free-tier chains with a PRO key. WHALE_CHAINS=ethereum,base,... overrides (paid plans)."""
+    """Ethereum always; EVM chains with a Blockscout PRO key; Solana with a Helius key.
+    WHALE_CHAINS=ethereum,base,... overrides (e.g. paid Blockscout plans)."""
+    import solana
     wanted = [c.strip() for c in os.environ.get("WHALE_CHAINS", ",".join(FREE_TIER)).split(",")]
-    return [c for c in wanted if c in CHAINS and (c == "ethereum" or api_key())]
+
+    def available(c: str) -> bool:
+        if c == "ethereum":
+            return True
+        return bool(solana.api_key()) if CHAINS[c].get("helius") else bool(api_key())
+    return [c for c in wanted if c in CHAINS and available(c)]
+
+
+def client_for(chain: str):
+    import solana
+    return solana.SolanaClient() if CHAINS[chain].get("helius") else BlockscoutClient(chain)
+
+
+def norm(address: str) -> str:
+    """EVM addresses are case-insensitive (store lowercase); Solana base58 addresses are not."""
+    address = (address or "").strip()
+    return address.lower() if address.startswith("0x") else address
 
 
 def tkey(chain: str, address: str) -> str:
     """Token id in the database: the bare address on Ethereum (as before), "<chain>-<address>" elsewhere."""
-    address = address.lower()
+    address = norm(address)
     return address if chain == "ethereum" else f"{chain}-{address}"
 
 
@@ -266,11 +290,11 @@ class WhaleStore:
                          ON CONFLICT(address) DO UPDATE SET label = COALESCE(NULLIF(excluded.label, ''), whales.label),
                            kind = CASE WHEN whales.manual = 1 THEN whales.kind ELSE excluded.kind END,
                            manual = MAX(whales.manual, excluded.manual)""",
-                      (address.lower(), label, kind, int(manual), ts))
+                      (norm(address), label, kind, int(manual), ts))
 
     def delete_whale(self, address: str) -> None:
         with self._conn() as c:
-            c.execute("DELETE FROM whales WHERE address = ?", (address.lower(),))
+            c.execute("DELETE FROM whales WHERE address = ?", (norm(address),))
 
     def whales(self) -> dict[str, dict]:
         out = {}
@@ -282,7 +306,7 @@ class WhaleStore:
 
     def save_label(self, address: str, label: str, kind: str) -> None:
         with self._conn() as c:
-            c.execute("INSERT OR REPLACE INTO address_labels VALUES (?, ?, ?)", (address.lower(), label, kind))
+            c.execute("INSERT OR REPLACE INTO address_labels VALUES (?, ?, ?)", (norm(address), label, kind))
 
     def labels(self) -> dict[str, dict]:
         return {r["address"]: r for r in self._rows("SELECT * FROM address_labels")}
@@ -291,7 +315,7 @@ class WhaleStore:
     def save_balance(self, address: str, token: str, ts: str, balance: float, share: float | None) -> None:
         with self._conn() as c:
             c.execute("INSERT OR REPLACE INTO whale_balances VALUES (?, ?, ?, ?, ?)",
-                      (address.lower(), token, ts, balance, share))
+                      (norm(address), token, ts, balance, share))
 
     def balances(self) -> dict[tuple[str, str], list[tuple[str, float, float | None]]]:
         out: dict[tuple, list] = {}
@@ -308,7 +332,7 @@ class WhaleStore:
 
     def mark_synced(self, address: str, token: str, ts: str) -> None:
         with self._conn() as c:
-            c.execute("INSERT OR REPLACE INTO whale_sync VALUES (?, ?, ?)", (address.lower(), token, ts))
+            c.execute("INSERT OR REPLACE INTO whale_sync VALUES (?, ?, ?)", (norm(address), token, ts))
 
     def synced(self) -> dict[tuple[str, str], str]:
         return {(r["address"], r["token"]): r["synced_at"] for r in self._rows("SELECT * FROM whale_sync")}
@@ -329,16 +353,16 @@ def transfer_rows(items: list[dict], whale: str, labels: dict[str, dict], chain:
     for x in items:
         tok = x.get("token") or {}
         frm, to = x.get("from") or {}, x.get("to") or {}
-        if to.get("hash", "").lower() == whale:
+        if norm(to.get("hash", "")) == whale:
             direction, cp = "in", frm
-        elif frm.get("hash", "").lower() == whale:
+        elif norm(frm.get("hash", "")) == whale:
             direction, cp = "out", to
         else:
             continue
         total = x.get("total") or {}
         qty = amount(total.get("value"), total.get("decimals") or tok.get("decimals"))
         price = float(tok.get("exchange_rate") or 0)
-        cp_addr = (cp.get("hash") or "").lower()
+        cp_addr = norm(cp.get("hash") or "")
         known = labels.get(cp_addr)
         cp_kind = known["kind"] if known else kind_of_address(cp)
         cp_label = (known or {}).get("label") or label_of(cp)
@@ -475,7 +499,7 @@ def build(store: WhaleStore, now: datetime | None = None, include_treasury: bool
         w, t = whales.get(addr), tokens.get(tok)
         if not w or not t or (t["symbol"] or "").upper() in SKIP_SYMBOLS:
             continue
-        if w["kind"] == "treasury" and not include_treasury:
+        if w["kind"] in HIDDEN_KINDS and not include_treasury:
             continue
         ts, bal, share = snaps[-1]
         st = position_stats(by_pair.get((addr, tok), []), t["price"], now)
@@ -556,12 +580,14 @@ class WhaleScanner:
             before = set(self.store.whales())
             errors = []
             for chain in active_chains():
-                ethereum = chain == "ethereum"
+                if chain == "ethereum":
+                    budget = (UNIVERSE, HOLDERS_PER_RUN, TRANSFERS_PER_RUN)
+                elif CHAINS[chain].get("helius"):
+                    budget = (SOLANA_UNIVERSE, SOLANA_HOLDERS, SOLANA_TRANSFERS)
+                else:
+                    budget = (EXTRA_UNIVERSE, EXTRA_HOLDERS, EXTRA_TRANSFERS)
                 try:
-                    self._run_chain(self._client(chain), chain, now,
-                                    UNIVERSE if ethereum else EXTRA_UNIVERSE,
-                                    HOLDERS_PER_RUN if ethereum else EXTRA_HOLDERS,
-                                    TRANSFERS_PER_RUN if ethereum else EXTRA_TRANSFERS)
+                    self._run_chain(self._client(chain), chain, now, *budget)
                 except Exception as exc:  # one chain failing (rate limit, outage) must not stop the others
                     errors.append(f"{chain}: {safety.safe_error(exc)}")
             self.last_new = len(set(self.store.whales()) - before)
@@ -606,7 +632,7 @@ class WhaleScanner:
                     sizes[v] = sizes.get(v, 0) + 1
             for h in holders:
                 addr = h.get("address") or {}
-                a = (addr.get("hash") or "").lower()
+                a = norm(addr.get("hash") or "")
                 bal = amount(h.get("value"), t["decimals"])
                 kind = kind_of_address(addr)
                 if a in BURN or a == raw:
@@ -622,13 +648,15 @@ class WhaleScanner:
                 self.store.upsert_whale(a, label_of(addr), kind, ts)
                 self.store.save_balance(a, t["token"], ts, bal, share)
             self.store.mark_holders(t["token"], ts)
+        if CHAINS[chain].get("helius"):
+            self._mark_custody(chain)
 
         # 3. Transfers of the biggest unsynced whale positions on this chain (how the position is being built).
         whales, synced, labels = self.store.whales(), self.store.synced(), self.store.labels()
         stale = crypto.iso(now - timedelta(hours=TRANSFER_SYNC_HOURS))
         latest: dict[tuple, float] = {}
         for (a, tok), snaps in self.store.balances().items():
-            if a in whales and whales[a]["kind"] != "treasury" and tok in tokens and split_key(tok)[0] == chain:
+            if a in whales and whales[a]["kind"] not in HIDDEN_KINDS and tok in tokens and split_key(tok)[0] == chain:
                 latest[(a, tok)] = snaps[-1][1] * tokens[tok]["price"]
         todo = sorted((k for k in latest if synced.get(k, "") < stale), key=lambda k: -latest[k])
         everything = "*" if chain == "ethereum" else f"*{chain}"   # sync marker for manual wallets
@@ -644,6 +672,19 @@ class WhaleScanner:
             self.store.save_transfers(transfer_rows(items, a, labels, chain))
             self.store.mark_synced(a, tok, ts)
 
+    def _mark_custody(self, chain: str) -> None:
+        """No free exchange labels on Solana: a wallet among the top holders of many tokens is custody."""
+        counts: dict[str, set] = {}
+        for (a, tok) in self.store.balances():
+            if split_key(tok)[0] == chain:
+                counts.setdefault(a, set()).add(tok)
+        whales = self.store.whales()
+        for a, toks in counts.items():
+            w = whales.get(a)
+            if w and not w["manual"] and len(toks) >= CUSTODY_TOKENS and w["kind"] != "custody":
+                self.store.upsert_whale(a, w["label"] or "", "custody", w["first_seen"])
+                self.store.save_label(a, w["label"] or "giełda / custody", "exchange")
+
     def _refresh_portfolio(self, client, address: str, ts: str, tokens: dict, chain: str = CHAIN) -> None:
         try:
             items = client.portfolio(address)
@@ -656,7 +697,7 @@ class WhaleScanner:
 
     def add_wallet(self, address: str, label: str) -> None:
         """Manually tracked wallet (e.g. a known fund from Arkham / X): pull its holdings right away."""
-        address = address.lower()
+        address = norm(address)
         ts = crypto.iso(crypto.utcnow())
         tokens = self.store.tokens()
         for i, chain in enumerate(active_chains()):
