@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Wieloryby · Insider Radar{% endblock %}
+{% block content %}
+  {% set d = data %}
+  <p class="muted" style="margin:0 0 14px; max-width: 1000px">Baza dużych portfeli na Ethereum: posiadacze co najmniej $1 mln w jednym ze ~140 największych tokenów.
+    Giełdy, pule DEX, mosty i adresy spalania są odfiltrowane, a multisigi Safe zostają, bo używają ich fundusze.
+    Za zakup lub sprzedaż uznaję tylko przepływ z giełdą albo kontraktem DEX. Przelew między portfelami to zwykle ten sam właściciel albo OTC, więc go nie liczę.
+    Pierwszy skan zajmuje kilka minut, a pełne pokrycie listy tokenów około 3 godzin.</p>
+  {% if args.get('error') %}<p class="err-msg" style="margin:0 0 12px">{{ args.get('error') }}</p>{% endif %}
+
+  <section class="stats">
+    <div class="stat card"><b>{{ d.whales|length }}</b><small>śledzonych portfeli</small></div>
+    <div class="stat card"><b>{{ d.tokens|length }}</b><small>tokenów z danymi wielorybów</small></div>
+    <div class="stat card"><b>{{ d.tokens|selectattr('acc')|list|length }}</b><small>tokenów, które ktoś akumuluje</small></div>
+    <div class="stat card"><b>{{ d.big|length }}</b><small>transakcji ≥ $1 mln (90 dni)</small></div>
+  </section>
+
+  <section class="card section">
+    <h2>Co akumulują wieloryby</h2>
+    <p class="note">Ocena rośnie, gdy kilka wielorybów konsekwentnie dokupuje, napływ netto jest duży względem kapitalizacji, a tokeny trafiają z giełd na prywatne portfele.
+      Od oceny 60 token dostaje <b>sygnał spot</b> z zapisaną ceną, żeby po 7, 30 i 90 dniach dało się sprawdzić, czy warto było kupić.</p>
+    <div class="table-wrap">
+    {% if d.tokens %}
+      <table>
+        <thead><tr><th>Token</th><th>Ocena</th><th class="num">Wieloryby</th><th class="num">Akumulują</th><th class="num">Wyprzedają</th>
+          <th class="num">Napływ 7 dni</th><th class="num">Napływ 30 dni</th><th class="num">Kurs 7 dni</th><th class="num">Od sygnału</th></tr></thead>
+        <tbody>
+        {% for t in d.tokens %}
+          <tr onclick="location.href='{{ url_for('whale_token', token=t.token) }}'">
+            <td><div class="token">{% if t.icon %}<img src="{{ t.icon }}" alt="" loading="lazy">{% endif %}
+              <div><b class="mono">{{ t.symbol }}</b><span class="sub">{{ t.name }} · {{ t.mcap|money }}</span></div></div></td>
+            <td><span class="badge {{ t.level }}"><i>{{ t.score }}</i>{{ t.label }}</span>{% if t.signal %}<span class="kind">sygnał spot od {{ t.signal.flagged_at|local("%d.%m") }}</span>{% endif %}</td>
+            <td class="num">{{ t.whales }}<span class="sub">{{ t.whale_usd|money }}</span></td>
+            <td class="num">{% if t.acc %}<b class="up">▲ {{ t.acc }}</b>{% else %}<span class="muted">0</span>{% endif %}</td>
+            <td class="num">{% if t.dist %}<b class="down">▼ {{ t.dist }}</b>{% else %}<span class="muted">0</span>{% endif %}</td>
+            <td class="num {{ ('up' if t.net7_usd > 0 else 'down') if t.net7_usd }}">{{ t.net7_usd|money if t.net7_usd else '—' }}</td>
+            <td class="num {{ ('up' if t.net30_usd > 0 else 'down') if t.net30_usd }}">{{ t.net30_usd|money if t.net30_usd else '—' }}</td>
+            <td class="num {{ ('up' if t.ch7 >= 0 else 'down') if t.ch7 is not none }}">{{ t.ch7|pct }}</td>
+            <td class="num">{% if t.perf %}<b class="{{ 'up' if t.perf.now >= 0 else 'down' }}">{{ t.perf.now|pct }}</b>{% else %}<span class="muted">—</span>{% endif %}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}<div class="empty">Brak danych. Pierwszy skan portfeli trwa kilka minut.</div>{% endif %}
+    </div>
+  </section>
+
+  <section class="card section">
+    <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap">
+      <div><h2 style="margin-bottom:4px">Duże transakcje wielorybów</h2>
+        <p class="note" style="margin:0">Ruchy śledzonych portfeli, od najnowszych.</p></div>
+{% if not static %}
+      <form method="get" style="display:flex; gap:8px; align-items:end; flex-wrap:wrap">
+        <label>Min. kwota $<input type="text" name="min_tx" value="{{ '%d'|format(min_usd) }}" inputmode="numeric" style="width:130px"></label>
+        <label>Kierunek<select name="tone">
+          <option value="">wszystkie</option>
+          <option value="up" {% if args.get('tone') == 'up' %}selected{% endif %}>akumulacja</option>
+          <option value="down" {% if args.get('tone') == 'down' %}selected{% endif %}>sprzedaż</option>
+          <option value="flat" {% if args.get('tone') == 'flat' %}selected{% endif %}>przelewy</option></select></label>
+        <button class="ghost">Filtruj</button>
+      </form>
+{% endif %}
+    </div>
+    <div class="table-wrap" style="margin-top:12px">
+    {% if big %}
+      <table>
+        <thead><tr><th>Kiedy</th><th>Portfel</th><th>Token</th><th class="num">Wartość</th><th>Co się stało</th><th>Druga strona</th><th></th></tr></thead>
+        <tbody>
+        {% for b in big %}
+          <tr onclick="location.href='{{ url_for('whale_wallet', address=b.address) }}'">
+            <td class="mono">{{ b.ts|local("%d.%m %H:%M") }}</td>
+            <td><b class="mono">{{ b.whale.label or (b.address|short) }}</b><span class="sub">{{ b.address|short }}</span></td>
+            <td class="mono"><a href="{{ url_for('whale_token', token=b.token) }}" onclick="event.stopPropagation()" style="color:inherit">{{ b.symbol }}</a></td>
+            <td class="num"><b>{{ b.usd|money }}</b></td>
+            <td style="white-space:normal"><span class="{{ b.tone if b.tone != 'flat' else 'muted' }}">{{ {'up': '▲ ', 'down': '▼ '}.get(b.tone, '') }}{{ b.text }}</span></td>
+            <td>{{ b.cp_label or (b.counterparty|short) }}<span class="sub">{{ {'exchange': 'giełda', 'contract': 'kontrakt / DEX', 'wallet': 'portfel', 'safe': 'multisig'}.get(b.cp_kind, b.cp_kind) }}</span></td>
+            <td><a href="https://etherscan.io/tx/{{ b.tx }}" target="_blank" rel="noopener" onclick="event.stopPropagation()">tx ↗</a></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}<div class="empty">Brak transakcji spełniających filtr.</div>{% endif %}
+    </div>
+  </section>
+
+  <section class="card section">
+    <div style="display:flex; justify-content:space-between; align-items:flex-end; gap:12px; flex-wrap:wrap; margin-bottom:12px">
+      <div><h2 style="margin-bottom:4px">Baza wielorybów</h2>
+        <p class="note" style="margin:0">Możesz dodać portfel, który znasz (np. fundusz z Arkham, Nansen albo X). Będzie śledzony w całości, ze wszystkimi tokenami.
+          {% if args.get('treasury') != '1' %}<a href="{{ url_for('whales_index', treasury=1) }}">Pokaż też portfele zespołów i skarbców (≥ 5% podaży)</a>{% else %}<a href="{{ url_for('whales_index') }}">Ukryj skarbce</a>{% endif %}</p></div>
+{% if not static %}
+      <form method="post" action="{{ url_for('whale_add') }}" style="display:flex; gap:8px; align-items:end; flex-wrap:wrap">
+        <label>Adres<input type="text" name="address" placeholder="0x…" style="width:330px" required></label>
+        <label>Nazwa<input type="text" name="label" placeholder="np. Fundusz X" style="width:160px"></label>
+        <button class="primary">Dodaj portfel</button>
+      </form>
+{% endif %}
+    </div>
+    <div class="table-wrap" style="max-height: 640px; overflow: auto">
+      <table>
+        <thead><tr><th>Portfel</th><th>Typ</th><th class="num">Śledzone saldo</th><th class="num">Tokeny</th><th>Akumuluje</th><th>Wyprzedaje</th><th class="num">Napływ 30 dni</th><th>Ostatni ruch</th></tr></thead>
+        <tbody>
+        {% for w in d.whales %}
+          <tr onclick="location.href='{{ url_for('whale_wallet', address=w.address) }}'">
+            <td><b class="mono">{{ w.label or (w.address|short) }}</b><span class="sub">{{ w.address|short }}</span></td>
+            <td><span class="chip {{ 'hot' if w.manual }}">{{ {'wallet': 'portfel', 'safe': 'multisig Safe', 'treasury': 'skarbiec / zespół', 'manual': 'dodany ręcznie'}.get(w.kind, w.kind) }}</span></td>
+            <td class="num">{{ w.usd|money }}</td>
+            <td class="num">{{ w.tokens }}</td>
+            <td>{% for s in w.acc %}<span class="chip" style="background:var(--blue-soft);color:var(--blue)">{{ s }}</span> {% endfor %}</td>
+            <td>{% for s in w.dist %}<span class="chip hot">{{ s }}</span> {% endfor %}</td>
+            <td class="num {{ ('up' if w.net30_usd > 0 else 'down') if w.net30_usd }}">{{ w.net30_usd|money if w.net30_usd else '—' }}</td>
+            <td class="mono">{{ w.last|local("%d.%m.%Y") if w.last else '—' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

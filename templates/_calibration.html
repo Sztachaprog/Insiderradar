@@ -41,6 +41,7 @@
         Zastosować da się ją od 30 śledzonych transakcji i dopiero na horyzoncie {{ cal.min_horizon_label }} lub dłuższym.
         Krótsze horyzonty to głównie szum.</p>
       <div style="display:flex; gap:8px; flex-wrap:wrap">
+{% if not static %}
         <form method="post" action="{{ url_for('calibrate', scope=scope, action='apply') }}">
           {% for k, v in args.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
           {% if 'h' not in args %}<input type="hidden" name="h" value="{{ horizon }}">{% endif %}
@@ -51,6 +52,7 @@
           {% for k, v in args.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
           <button class="ghost">Przywróć domyślne wagi</button>
         </form>
+{% endif %}
       </div>
     </div>
   </div>

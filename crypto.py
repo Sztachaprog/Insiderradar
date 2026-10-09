@@ -29,6 +29,7 @@ MIN_MCAP = float(os.environ.get("CRYPTO_MIN_MCAP", "3e6"))
 MAX_MCAP = float(os.environ.get("CRYPTO_MAX_MCAP", "1.5e9"))      # "smaller tokens"
 MIN_VOLUME = 200_000
 TRACK_DAYS = 30
+DETAILS_PER_RUN = int(os.environ.get("CRYPTO_DETAILS_PER_RUN", "8"))  # project info calls per scan
 DEDUPE_HOURS = 72                                                  # one event per coin per 3 days
 BENCHMARK = "bitcoin"
 HORIZONS = [(1, "1 h"), (24, "24 h"), (72, "3 dni"), (168, "7 dni")]
@@ -503,7 +504,7 @@ class CryptoScanner:
 
         # Project info for new tokens (rate limited, the rest comes next run).
         known = self.store.coins()
-        for cid in [c for c in dict.fromkeys(e["coin_id"] for e in events) if c not in known][:8]:
+        for cid in [c for c in dict.fromkeys(e["coin_id"] for e in events) if c not in known][:DETAILS_PER_RUN]:
             try:
                 self.store.save_coin(cid, client.coin(cid))
             except Exception:

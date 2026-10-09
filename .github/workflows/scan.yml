@@ -1,0 +1,87 @@
+name: Skan danych
+
+# Every ~10 min: one scan cycle (insiders, crypto, whales every ~30 min), the database
+# is kept on the `data` branch (one force-pushed commit, so history does not grow),
+# and a read-only snapshot of the app is published to GitHub Pages.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      whales:
+        description: "Skanuj też wieloryby niezależnie od godziny"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    env:
+      TZ: Europe/Warsaw
+      FORM4_DB: form4.db
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+      # Smaller per-run budgets: runs are frequent, so coverage builds up over the day.
+      HISTORY_PER_RUN: "2"
+      CRYPTO_DETAILS_PER_RUN: "5"
+      WHALE_HOLDERS_PER_RUN: "10"
+      WHALE_TRANSFERS_PER_RUN: "25"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Pobierz bazę z gałęzi data
+        run: |
+          if git fetch --depth=1 origin data 2>/dev/null; then
+            git show origin/data:form4.db > form4.db
+            git show origin/data:scan_status.json > scan_status.json 2>/dev/null || true
+            echo "Baza: $(du -h form4.db | cut -f1)"
+          else
+            echo "Brak gałęzi data, start od pustej bazy"
+          fi
+
+      - name: Skan
+        run: python ci.py --no-export ${{ inputs.whales && '--whales' || '' }}
+
+      - name: Zapisz bazę na gałęzi data
+        if: success() || failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          [ -f form4.db ] || exit 0
+          mkdir -p /tmp/data && cp form4.db /tmp/data/ && cp scan_status.json /tmp/data/ 2>/dev/null || true
+          cd /tmp/data
+          git init -q -b data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A && git commit -qm "Dane $(date '+%Y-%m-%d %H:%M %Z')"
+          git push -fq "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" data
+
+      - name: Eksport strony
+        run: python ci.py --no-scan
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4

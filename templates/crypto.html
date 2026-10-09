@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Krypto · Insider Radar{% endblock %}
 {% block content %}
+{% if not static %}
   <form class="filters card" method="get">
     <label>Ruch
       <select name="trigger">
@@ -29,6 +30,7 @@
     <input type="hidden" name="sort" value="{{ args.get('sort', 'time') }}">
     <button class="primary">Filtruj</button>
   </form>
+{% endif %}
 
   <section class="stats">
     <div class="stat card"><b>{{ summary.count }}</b><small>wykrytych ruchów</small></div>

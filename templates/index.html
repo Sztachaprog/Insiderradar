@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
+{% if not static %}
   <form class="filters card" method="get">
     <label>Typ
       <select name="code">
@@ -36,6 +37,7 @@
     <input type="hidden" name="sort" value="{{ args.get('sort', 'value') }}">
     <button class="primary">Filtruj</button>
   </form>
+{% endif %}
 
   <section class="stats">
     <div class="stat card"><b>{{ summary.count }}</b><small>transakcji · {{ stored }} zgłoszeń w bazie</small></div>

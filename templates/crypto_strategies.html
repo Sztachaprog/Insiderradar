@@ -16,6 +16,7 @@
     Strategie testują się na wszystkich zebranych danych, także tych sprzed ich zapisania.
     Ceny są sprawdzane co skan (~15 min), więc krótkie szpilki między pomiarami są niewidoczne. TP liczę po cenie zlecenia, a SL po faktycznej cenie, czyli ostrożnie.</p>
 
+{% if not static %}
   <form class="filters card" method="get" style="grid-template-columns: repeat(auto-fit, minmax(160px, 220px))">
     <input type="hidden" name="s" value="{{ selected.key }}">
     <label>Koszt transakcji (kupno + sprzedaż) %
@@ -24,6 +25,7 @@
       <input type="text" name="stake" value="{{ '%g'|format(stake) }}" inputmode="numeric"></label>
     <button class="primary">Przelicz</button>
   </form>
+{% endif %}
 
   <section class="card table-wrap" style="margin-bottom:16px">
     <table>
@@ -81,6 +83,7 @@
     </section>
   </div>
 
+{% if not static %}
   <section class="card section">
     <h2>Edytor strategii</h2>
     <p class="note">Edytor startuje od reguł wybranej strategii. Zmień je, kliknij <b>Podgląd</b>, żeby od razu zobaczyć wynik na zebranych danych, i <b>Zapisz</b>, żeby śledzić strategię przez kolejne dni.</p>
@@ -121,6 +124,7 @@
       </form>{% endif %}
     </div>
   </section>
+{% endif %}
 
   <section class="card table-wrap">
     {% if r.trades %}

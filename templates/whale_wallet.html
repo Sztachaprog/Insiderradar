@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}{{ w.label or (w.address|short) }} · wieloryby{% endblock %}
+{% block content %}
+  <p style="margin:0 0 12px"><a href="{{ url_for('whales_index') }}">← wróć do wielorybów</a></p>
+  <section class="card section">
+    <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:flex-start">
+      <div>
+        <h1 style="font:700 26px 'Space Grotesk',sans-serif; margin:0">{{ w.label or "Portfel bez nazwy" }}</h1>
+        <div class="mono muted" style="margin-top:4px">{{ w.address }}</div>
+        <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap">
+          <span class="chip {{ 'hot' if w.manual }}">{{ {'wallet': 'portfel', 'safe': 'multisig Safe', 'treasury': 'skarbiec / zespół', 'manual': 'dodany ręcznie'}.get(w.kind, w.kind) }}</span>
+          <span class="chip">w bazie od {{ w.first_seen|local("%d.%m.%Y") }}</span>
+          <a href="https://etherscan.io/address/{{ w.address }}" target="_blank" rel="noopener">Etherscan ↗</a>
+          <a href="https://intel.arkm.com/explorer/address/{{ w.address }}" target="_blank" rel="noopener">Arkham ↗</a>
+        </div>
+      </div>
+      {% if w.manual and not static %}
+      <form method="post" action="{{ url_for('whale_delete', address=w.address) }}" onsubmit="return confirm('Przestać śledzić ten portfel?')">
+        <button class="ghost">Usuń z bazy</button></form>{% endif %}
+    </div>
+    <div class="facts">
+      <div><small>Śledzone saldo</small><b>{{ w.usd|money }}</b></div>
+      <div><small>Tokenów</small><b>{{ w.tokens }}</b></div>
+      <div><small>Napływ netto 30 dni</small><b class="{{ ('up' if w.net30_usd > 0 else 'down') if w.net30_usd }}">{{ w.net30_usd|money }}</b></div>
+      <div><small>Akumuluje</small><b class="up" style="font-family:Inter">{{ w.acc|join(', ') or '—' }}</b></div>
+      <div><small>Wyprzedaje</small><b class="down" style="font-family:Inter">{{ w.dist|join(', ') or '—' }}</b></div>
+    </div>
+  </section>
+
+  <section class="card section">
+    <h2>Pozycje</h2>
+    <div class="table-wrap">
+    {% if w.positions %}
+      <table>
+        <thead><tr><th>Token</th><th class="num">Saldo</th><th class="num">% podaży</th><th class="num">Zmiana salda</th><th class="num">Zakupy / sprzedaże 30 dni</th><th class="num">Netto 30 dni</th><th>Status</th></tr></thead>
+        <tbody>
+        {% for p in w.positions %}
+          <tr onclick="location.href='{{ url_for('whale_token', token=p.token) }}'">
+            <td><b class="mono">{{ p.symbol }}</b><span class="sub">{{ p.price|usd }}</span></td>
+            <td class="num">{{ p.usd|money }}<span class="sub">{{ "{:,.0f}".format(p.balance) }}</span></td>
+            <td class="num">{{ "%.2f%%"|format(p.share * 100) if p.share else '—' }}</td>
+            <td class="num {{ ('up' if p.snap_change >= 0 else 'down') if p.snap_change }}" title="od {{ p.snap_since|local }}">{{ p.snap_change|pct if p.snap_change is not none else '—' }}</td>
+            <td class="num">{{ p.buys30 }} / {{ p.sells30 }}</td>
+            <td class="num {{ ('up' if p.net30_usd > 0 else 'down') if p.net30_usd }}">{{ p.net30_usd|money if p.net30_usd else '—' }}</td>
+            <td>{% if p.accumulating %}<span class="chip" style="background:var(--blue-soft);color:var(--blue)">▲ akumuluje</span>{% elif p.distributing %}<span class="chip hot">▼ wyprzedaje</span>{% else %}<span class="chip">trzyma</span>{% endif %}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}<div class="empty">Brak pozycji w śledzonych tokenach. Portfel może trzymać tokeny spoza listy ~140 największych.</div>{% endif %}
+    </div>
+  </section>
+
+  {% include "_whale_transfers.html" %}
+{% endblock %}

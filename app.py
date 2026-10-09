@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -29,6 +30,7 @@ import history
 import market
 import signals
 import strategy
+import whales
 
 DB_PATH = Path(os.environ.get("FORM4_DB", Path(__file__).with_name("form4.db")))
 SCAN_PAGES = int(os.environ.get("SCAN_PAGES", "3"))
@@ -36,8 +38,9 @@ SCAN_INTERVAL_MIN = int(os.environ.get("SCAN_INTERVAL_MIN", "15"))
 TRACK_DAYS = int(os.environ.get("TRACK_DAYS", "120"))  # keep refreshing prices this long after adding
 BENCHMARK = "SPY"
 HISTORY_DAYS = 7          # re-check an insider's track record weekly
-HISTORY_PER_RUN = 5       # insiders looked up per scan (each costs up to ~40 SEC requests)
+HISTORY_PER_RUN = int(os.environ.get("HISTORY_PER_RUN", "5"))  # insiders per scan (each up to ~40 SEC requests)
 CRYPTO_INTERVAL_MIN = int(os.environ.get("CRYPTO_INTERVAL_MIN", "15"))
+WHALE_INTERVAL_MIN = int(os.environ.get("WHALE_INTERVAL_MIN", "30"))
 
 
 # ---------- Storage ----------
@@ -530,21 +533,29 @@ def fmt_ago(ts: str) -> str:
 
 def create_app(store: Store | None = None, scanner: Scanner | None = None,
                start_background: bool = True, tracker: Tracker | None = None,
-               crypto_store: crypto.CryptoStore | None = None, crypto_scanner=None) -> Flask:
+               crypto_store: crypto.CryptoStore | None = None, crypto_scanner=None,
+               whale_store: whales.WhaleStore | None = None, whale_scanner=None, static: bool = False) -> Flask:
+    """static: read-only render for GitHub Pages (no forms that need a server).
+    SCAN_DISABLED=1 browses a downloaded database locally without scanning."""
+    start_background = start_background and os.environ.get("SCAN_DISABLED") != "1"
     app = Flask(__name__)
     store = store or Store(DB_PATH)
     cstore = crypto_store or crypto.CryptoStore(store.path)
     if scanner is None:
-        ua = os.environ.get("SEC_USER_AGENT")
+        ua = os.environ.get("SEC_USER_AGENT") or ("viewer only@example.com" if not start_background else None)
         if not ua:
             raise SystemExit('Set SEC_USER_AGENT, e.g. $env:SEC_USER_AGENT = "Jan Kowalski jan@example.com"')
         tracker = tracker or Tracker(store, market.YahooClient, sec_factory=lambda: fs.SecClient(ua))
         scanner = Scanner(store, lambda: fs.SecClient(ua), SCAN_PAGES, after_scan=tracker.refresh)
+    wstore = whale_store or whales.WhaleStore(store.path)
+    if whale_scanner is None:
+        whale_scanner = whales.WhaleScanner(wstore, whales.BlockscoutClient)
     if crypto_scanner is None:
         crypto_scanner = crypto.CryptoScanner(cstore, crypto.CoinGeckoClient)
     if start_background:
         threading.Thread(target=scanner.loop, args=(SCAN_INTERVAL_MIN * 60,), daemon=True).start()
         threading.Thread(target=crypto_scanner.loop, args=(CRYPTO_INTERVAL_MIN * 60,), daemon=True).start()
+        threading.Thread(target=whale_scanner.loop, args=(WHALE_INTERVAL_MIN * 60,), daemon=True).start()
 
     def market_data():
         return {"tracked": store.tracked(), "prices": store.prices(), "companies": store.companies(),
@@ -557,6 +568,8 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
     def common(**extra):
         return {"scanner": scanner, "tracker": tracker, "crypto_scanner": crypto_scanner,
                 "interval": SCAN_INTERVAL_MIN, "crypto_interval": CRYPTO_INTERVAL_MIN,
+                "whale_scanner": whale_scanner, "whale_interval": WHALE_INTERVAL_MIN, "static": static,
+                "generated_at": datetime.now(crypto.LOCAL_TZ).strftime("%d.%m.%Y %H:%M %Z"),
                 "args": request.args, **extra}
 
     @app.template_filter("pct")
@@ -567,16 +580,18 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
 
     @app.template_filter("money")
     def money(v):
-        if v is None:
+        if not isinstance(v, (int, float)):  # None or a missing field (Jinja Undefined)
             return "—"
+        sign = "−" if v < 0 else ""
         for div, suf in [(1e12, " bln"), (1e9, " mld"), (1e6, " mln")]:
             if abs(v) >= div:
-                return f"${v / div:,.1f}{suf}"
-        return f"${v:,.0f}"
+                return f"{sign}${abs(v) / div:,.1f}{suf}"
+        return f"{sign}${abs(v):,.0f}"
 
     app.add_template_filter(fmt_usd, "usd")
     app.add_template_filter(fmt_ago, "ago")
     app.add_template_filter(crypto.local, "local")
+    app.add_template_filter(lambda a: f"{a[:6]}…{a[-4:]}" if a else "—", "short")
 
     @app.get("/")
     def index():
@@ -729,13 +744,78 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         rows, summary = build_crypto_rows(crypto_data(), request.args)
         return jsonify(summary=summary, rows=rows)
 
+    # ----- whales -----
+
+    @app.get("/wieloryby")
+    def whales_index():
+        data = whales.build(wstore, include_treasury=request.args.get("treasury") == "1")
+        min_usd = _float(request.args.get("min_tx")) or whales.BIG_TX_USD
+        big = [b for b in data["big"] if (b["usd"] or 0) >= min_usd]
+        tone = request.args.get("tone", "")
+        if tone:
+            big = [b for b in big if b["tone"] == tone]
+        return render_template("whales.html", data=data, big=big[:100], min_usd=min_usd,
+                               tokens=wstore.tokens(), **common(page="whales"))
+
+    @app.get("/wieloryby/token/<token>")
+    def whale_token(token):
+        data = whales.build(wstore, include_treasury=True)
+        row = next((t for t in data["tokens"] if t["token"] == token.lower()), None)
+        if row is None:
+            abort(404)
+        transfers = [b for b in wstore.transfers() if b["token"] == row["token"]]
+        for t in transfers:
+            t["text"], t["tone"] = whales.describe_transfer(t)
+        whale_map = wstore.whales()
+        points = wstore.token_prices().get(row["token"], [])
+        return render_template("whale_token.html", t=row, transfers=transfers[:150], whale_map=whale_map,
+                               points=points, labels=[crypto.local(ts, "%d.%m %H:%M") for ts, _ in points],
+                               horizons=whales.HORIZONS, **common(page="whales"))
+
+    @app.get("/wieloryby/portfel/<address>")
+    def whale_wallet(address):
+        address = address.lower()
+        data = whales.build(wstore, include_treasury=True)
+        w = next((x for x in data["whales"] if x["address"] == address), None)
+        if w is None:
+            abort(404)
+        transfers = [t for t in wstore.transfers() if t["address"] == address]
+        for t in transfers:
+            t["text"], t["tone"] = whales.describe_transfer(t)
+        return render_template("whale_wallet.html", w=w, transfers=transfers[:150], **common(page="whales"))
+
+    @app.post("/wieloryby/dodaj")
+    def whale_add():
+        address = (request.form.get("address") or "").strip()
+        if not re.fullmatch(r"0x[0-9a-fA-F]{40}", address):
+            return redirect(url_for("whales_index", error="Niepoprawny adres. Podaj adres Ethereum w formacie 0x…"))
+        whale_scanner.add_wallet(address, (request.form.get("label") or "").strip()[:60])
+        return redirect(url_for("whale_wallet", address=address.lower()))
+
+    @app.post("/wieloryby/<address>/usun")
+    def whale_delete(address):
+        wstore.delete_whale(address)
+        return redirect(url_for("whales_index"))
+
+    @app.post("/wieloryby/scan")
+    def whale_scan_now():
+        whale_scanner.trigger()
+        return redirect(url_for("whales_index"))
+
+    @app.get("/api/whales")
+    def api_whales():
+        data = whales.build(wstore)
+        return jsonify(tokens=[{k: v for k, v in t.items() if k != "positions"} for t in data["tokens"]],
+                       big=data["big"][:200])
+
     @app.get("/api/status")
     def api_status():
         return jsonify(running=scanner.running, last_run=scanner.last_run,
                        last_new=scanner.last_new, last_error=scanner.last_error,
                        prices_run=getattr(tracker, "last_run", None),
                        crypto_running=getattr(crypto_scanner, "running", False),
-                       crypto_last_run=getattr(crypto_scanner, "last_run", None))
+                       crypto_last_run=getattr(crypto_scanner, "last_run", None),
+                       whales_running=getattr(whale_scanner, "running", False))
 
     return app
 

@@ -1,0 +1,27 @@
+{# Needs: transfers (with text/tone), optional whale_map for the wallet column #}
+<section class="card section">
+  <h2>Transfery</h2>
+  <p class="note">Ostatnie transfery pobrane z Blockscout (do 50 na portfel i token, odświeżane co 12 h).</p>
+  <div class="table-wrap" style="max-height: 620px; overflow: auto">
+  {% if transfers %}
+    <table>
+      <thead><tr><th>Kiedy</th>{% if whale_map is defined %}<th>Portfel</th>{% endif %}<th>Token</th><th class="num">Ilość</th><th class="num">Wartość</th><th>Co się stało</th><th>Druga strona</th><th></th></tr></thead>
+      <tbody>
+      {% for b in transfers %}
+        <tr style="cursor:default">
+          <td class="mono">{{ b.ts|local("%d.%m.%y %H:%M") }}</td>
+          {% if whale_map is defined %}{% set w = whale_map.get(b.address) %}
+            <td><a href="{{ url_for('whale_wallet', address=b.address) }}" class="mono" style="color:inherit">{{ (w.label if w and w.label) or (b.address|short) }}</a></td>{% endif %}
+          <td class="mono"><a href="{{ url_for('whale_token', token=b.token) }}" style="color:inherit">{{ b.symbol }}</a></td>
+          <td class="num">{{ "{:,.0f}".format(b.amount) }}</td>
+          <td class="num">{{ b.usd|money }}</td>
+          <td style="white-space:normal"><span class="{{ b.tone if b.tone != 'flat' else 'muted' }}">{{ {'up': '▲ ', 'down': '▼ '}.get(b.tone, '') }}{{ b.text }}</span></td>
+          <td>{{ b.cp_label or (b.counterparty|short) }}<span class="sub">{{ {'exchange': 'giełda', 'contract': 'kontrakt / DEX', 'wallet': 'portfel', 'safe': 'multisig'}.get(b.cp_kind, b.cp_kind) }}</span></td>
+          <td><a href="https://etherscan.io/tx/{{ b.tx }}" target="_blank" rel="noopener">tx ↗</a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% else %}<div class="empty">Brak transferów w bazie. Pobiorą się przy kolejnych skanach.</div>{% endif %}
+  </div>
+</section>

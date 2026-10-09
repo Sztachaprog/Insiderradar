@@ -138,17 +138,31 @@
       <a href="{{ url_for('crypto_index') }}" class="{{ 'on' if page == 'crypto' }}">Krypto</a>
       <a href="{{ url_for('crypto_results', **(a if is_crypto else {})) }}" class="{{ 'on' if page == 'crypto_perf' }}">Krypto wyniki</a>
       <a href="{{ url_for('crypto_strategies') }}" class="{{ 'on' if page == 'strategies' }}">Strategie</a>
+      <a href="{{ url_for('whales_index') }}" class="{{ 'on' if page == 'whales' }}">Wieloryby</a>
     </nav>
     <div class="status">
-      {% if is_crypto %}
+      {% if page == 'whales' %}
+        {% set ws = whale_scanner %}
+        {% if ws.running %}<span><span class="dot busy"></span>Skanowanie portfeli…</span>
+        {% elif ws.last_error %}<span class="err-msg" title="{{ ws.last_error }}"><span class="dot err"></span>Błąd Blockscout</span>
+        {% else %}<span><span class="dot"></span>Ostatni skan {{ ws.last_run or "—" }} (+{{ ws.last_new }} nowych portfeli)</span>{% endif %}
+        {% if not static %}<span>auto co {{ whale_interval }} min</span>{% endif %}
+{% if not static %}
+        <form method="post" action="{{ url_for('whale_scan_now') }}">
+          <button class="ghost" {% if ws.running %}disabled{% endif %}>Skanuj teraz</button>
+        </form>
+{% endif %}
+      {% elif is_crypto %}
         {% set cs = crypto_scanner %}
         {% if cs.running %}<span><span class="dot busy"></span>Skanowanie CoinGecko…</span>
         {% elif cs.last_error %}<span class="err-msg" title="{{ cs.last_error }}"><span class="dot err"></span>Błąd CoinGecko</span>
         {% else %}<span><span class="dot"></span>Ostatni skan {{ cs.last_run or "—" }} (+{{ cs.last_new }} nowych)</span>{% endif %}
-        <span>auto co {{ crypto_interval }} min</span>
+        {% if not static %}<span>auto co {{ crypto_interval }} min</span>{% endif %}
+{% if not static %}
         <form method="post" action="{{ url_for('crypto_scan_now') }}">
           <button class="ghost" {% if cs.running %}disabled{% endif %}>Skanuj teraz</button>
         </form>
+{% endif %}
       {% else %}
         {% if scanner.running %}
           <span><span class="dot busy"></span>Skanowanie EDGAR…</span>
@@ -158,26 +172,34 @@
           <span><span class="dot"></span>Ostatni skan {{ scanner.last_run or "—" }} (+{{ scanner.last_new }} nowych)</span>
         {% endif %}
         {% if tracker and tracker.last_run %}<span>ceny {{ tracker.last_run }}{% if tracker.last_error %} · {{ tracker.last_error }}{% endif %}</span>{% endif %}
-        <span>auto co {{ interval }} min</span>
+        {% if not static %}<span>auto co {{ interval }} min</span>{% endif %}
+{% if not static %}
         <form method="post" action="{{ url_for('scan_now') }}">
           <button class="ghost" {% if scanner.running %}disabled{% endif %}>Skanuj teraz</button>
         </form>
+{% endif %}
       {% endif %}
     </div>
   </header>
 
+  {% if static %}
+  <div class="card" style="padding:10px 14px; margin-bottom:16px; font-size:13px; color:var(--muted)">
+    Podgląd wygenerowany {{ generated_at }}. Dane odświeża GitHub Actions co ~10 min.
+    Filtry, edytor strategii i dodawanie portfeli działają w wersji lokalnej (instrukcja w README).
+  </div>
+  {% endif %}
   {% block content %}{% endblock %}
 
-  <footer>Dane: SEC EDGAR (Form 4), Yahoo Finance, CoinGecko. Ocena sygnału to heurystyka, a nie porada inwestycyjna.</footer>
+  <footer>Dane: SEC EDGAR (Form 4), Yahoo Finance, CoinGecko, Blockscout. Ocena sygnału to heurystyka, a nie porada inwestycyjna.</footer>
 </div>
 
-{% if scanner.running or (crypto_scanner and crypto_scanner.running and page in ['crypto', 'crypto_perf', 'strategies']) %}
+{% if scanner.running or (crypto_scanner and crypto_scanner.running and page in ['crypto', 'crypto_perf', 'strategies']) or (whale_scanner and whale_scanner.running and page == 'whales') %}
 <script>
   // Reload once the background scan finishes.
   const poll = setInterval(async () => {
     try {
       const s = await (await fetch("{{ url_for('api_status') }}")).json();
-      if (!s.running && !s.crypto_running) { clearInterval(poll); location.reload(); }
+      if (!s.running && !s.crypto_running && !s.whales_running) { clearInterval(poll); location.reload(); }
     } catch (e) { clearInterval(poll); }
   }, 2000);
 </script>

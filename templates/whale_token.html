@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}{{ t.symbol }} · wieloryby{% endblock %}
+{% block content %}
+  <p style="margin:0 0 12px"><a href="{{ url_for('whales_index') }}">← wróć do wielorybów</a></p>
+  <div class="grid2" style="margin-bottom:16px">
+    <section class="card section">
+      <div class="token" style="gap:12px">{% if t.icon %}<img src="{{ t.icon }}" alt="" style="width:40px;height:40px">{% endif %}
+        <div><h1 style="font:700 30px 'Space Grotesk',sans-serif; margin:0">{{ t.symbol }}</h1><span class="muted">{{ t.name }}</span></div></div>
+      <div class="facts">
+        <div><small>Kurs</small><b>{{ t.price|usd }}</b></div>
+        <div><small>Kapitalizacja</small><b>{{ t.mcap|money }}</b></div>
+        <div><small>Posiadaczy</small><b>{{ "{:,}".format(t.holders) if t.holders else "—" }}</b></div>
+        <div><small>Kurs 7 dni</small><b class="{{ ('up' if t.ch7 >= 0 else 'down') if t.ch7 is not none }}">{{ t.ch7|pct }}</b></div>
+      </div>
+      <p style="margin:12px 0 0"><a href="https://etherscan.io/token/{{ t.token }}" target="_blank" rel="noopener">Etherscan ↗</a></p>
+      {% if t.signal %}
+        <h2 style="margin-top:18px">Sygnał spot</h2>
+        <p class="note">Wystawiony {{ t.signal.flagged_at|local }} przy cenie {{ t.signal.price|usd }} (ocena {{ t.signal.score }}).</p>
+        <div class="facts" style="margin-top:0">
+          <div><small>Od sygnału</small><b class="{{ ('up' if t.perf.now >= 0 else 'down') if t.perf.now is not none }}">{{ t.perf.now|pct }}</b></div>
+          {% for n, label in horizons %}<div><small>Po {{ label }}</small>{% if t.perf.h.get(n) is not none %}<b class="{{ 'up' if t.perf.h[n] >= 0 else 'down' }}">{{ t.perf.h[n]|pct }}</b>{% else %}<b class="muted">czekamy</b>{% endif %}</div>{% endfor %}
+        </div>
+      {% endif %}
+    </section>
+    <section class="card section">
+      <h2>Co robią wieloryby?</h2>
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px">
+        <span class="badge {{ t.level }}"><i>{{ t.score }}/100</i>{{ t.label }} sygnał akumulacji</span></div>
+      <div class="facts" style="margin-top:4px">
+        <div><small>Wielorybów</small><b>{{ t.whales }}</b></div>
+        <div><small>Akumuluje / wyprzedaje</small><b><span class="up">{{ t.acc }}</span> / <span class="down">{{ t.dist }}</span></b></div>
+        <div><small>Napływ 30 dni</small><b class="{{ ('up' if t.net30_usd > 0 else 'down') if t.net30_usd }}">{{ t.net30_usd|money }}</b></div>
+      </div>
+      <ul class="reasons">
+        {% for sign, text in t.reasons %}<li class="{{ {'+': 'plus', '-': 'minus'}.get(sign, 'info') }}"><i>{{ {'+': '+', '-': '−'}.get(sign, '·') }}</i><span>{{ text }}</span></li>
+        {% else %}<li class="info"><i>·</i><span>W ostatnich 30 dniach wieloryby nie kupowały ani nie sprzedawały tego tokena przez giełdę ani DEX. Po prostu trzymają.</span></li>{% endfor %}
+      </ul>
+    </section>
+  </div>
+
+  {% if points|length > 1 %}
+  <section class="card section">
+    <h2>Kurs (pomiary aplikacji)</h2>
+    <div class="legend"><span style="--c: var(--blue)">Kurs {{ t.symbol }}</span>{% if t.signal %}<span class="dash" style="--c: var(--pink)">Cena sygnału {{ t.signal.price|usd }}</span>{% endif %}</div>
+    <div class="chart-box"><canvas id="price"></canvas></div>
+  </section>
+  {% endif %}
+
+  <section class="card section">
+    <h2>Wieloryby trzymające {{ t.symbol }}</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Portfel</th><th class="num">Saldo</th><th class="num">% podaży</th><th class="num">Zakupy / sprzedaże 30 dni</th><th class="num">Netto 7 dni</th><th class="num">Netto 30 dni</th><th>Status</th></tr></thead>
+        <tbody>
+        {% for p in t.positions %}
+          <tr onclick="location.href='{{ url_for('whale_wallet', address=p.address) }}'">
+            <td><b class="mono">{{ p.whale.label or (p.address|short) }}</b><span class="sub">{{ p.address|short }} · {{ {'wallet': 'portfel', 'safe': 'multisig', 'treasury': 'skarbiec', 'manual': 'ręczny'}.get(p.whale.kind, p.whale.kind) }}</span></td>
+            <td class="num">{{ p.usd|money }}<span class="sub">{{ "{:,.0f}".format(p.balance) }} {{ t.symbol }}</span></td>
+            <td class="num">{{ "%.2f%%"|format(p.share * 100) if p.share else '—' }}</td>
+            <td class="num">{{ p.buys30 }} / {{ p.sells30 }}</td>
+            <td class="num {{ ('up' if p.net7_usd > 0 else 'down') if p.net7_usd }}">{{ p.net7_usd|money if p.net7_usd else '—' }}</td>
+            <td class="num {{ ('up' if p.net30_usd > 0 else 'down') if p.net30_usd }}">{{ p.net30_usd|money if p.net30_usd else '—' }}</td>
+            <td>{% if p.accumulating %}<span class="chip" style="background:var(--blue-soft);color:var(--blue)">▲ akumuluje</span>{% elif p.distributing %}<span class="chip hot">▼ wyprzedaje</span>{% else %}<span class="chip">trzyma</span>{% endif %}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {% include "_whale_transfers.html" %}
+{% endblock %}
+{% block scripts %}
+{% if points|length > 1 %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const pts = {{ points|tojson }}, labels = {{ labels|tojson }}, sig = {{ (t.signal.price if t.signal else none)|tojson }};
+  const fmt = v => v >= 1 ? "$" + Number(v).toFixed(2) : "$" + Number(v).toPrecision(4);
+  const ds = [{ label: "Kurs", data: pts.map(p => p[1]), borderColor: css("--blue"), borderWidth: 2, tension: .2, pointRadius: 0, pointHoverRadius: 5,
+                fill: { target: "origin" }, backgroundColor: css("--blue-soft") }];
+  if (sig) ds.push({ label: "Cena sygnału", data: pts.map(() => sig), borderColor: css("--pink"), borderWidth: 2, borderDash: [6, 4], pointRadius: 0, pointHoverRadius: 0 });
+  new Chart(document.getElementById("price"), { type: "line", data: { labels, datasets: ds },
+    options: { maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => ` ${c.dataset.label}: ${fmt(c.parsed.y)}` } } },
+      scales: { x: { grid: { display: false }, ticks: { color: css("--muted"), maxTicksLimit: 8 } },
+                y: { grid: { color: css("--line") }, border: { display: false }, ticks: { color: css("--muted"), callback: v => fmt(v) } } } } });
+</script>
+{% endif %}
+{% endblock %}
