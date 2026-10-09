@@ -40,9 +40,9 @@ jobs:
       WHALE_HOLDERS_PER_RUN: "10"
       WHALE_TRANSFERS_PER_RUN: "25"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -53,7 +53,8 @@ jobs:
         run: |
           if git fetch --depth=1 origin data 2>/dev/null; then
             git show origin/data:form4.db > form4.db
-            git show origin/data:scan_status.json > scan_status.json 2>/dev/null || true
+            # Only keep the status file if it exists on the branch (a redirect alone would leave an empty file).
+            if git show origin/data:scan_status.json > /tmp/status.json 2>/dev/null; then mv /tmp/status.json scan_status.json; fi
             echo "Baza: $(du -h form4.db | cut -f1)"
           else
             echo "Brak gałęzi data, start od pustej bazy"

@@ -68,14 +68,24 @@ def scan(only: set[str], force_whales: bool):
     objs = {"stocks": scanner, "tracker": tracker, "crypto": cscanner, "whales": wscanner}
     fields = ("last_run", "last_new", "last_error")
     if only:
-        old = json.loads(STATUS.read_text()) if STATUS.exists() else {}
+        old = read_status()
         STATUS.write_text(json.dumps({**old, **{k: {f: getattr(o, f, None) for f in fields}
                                                 for k, o in objs.items() if getattr(o, "last_run", None)}}))
-    elif STATUS.exists():
-        for k, vals in json.loads(STATUS.read_text()).items():
-            for f, v in vals.items():
-                setattr(objs[k], f, v)
+    else:
+        for k, vals in read_status().items():
+            if k in objs and isinstance(vals, dict):
+                for f, v in vals.items():
+                    setattr(objs[k], f, v)
     return store, cstore, wstore, scanner, tracker, cscanner, wscanner
+
+
+def read_status() -> dict:
+    """Scanner status saved by the previous step; a missing, empty or broken file is just 'no status'."""
+    try:
+        data = json.loads(STATUS.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def _cache_methods(obj, names: list[str]) -> None:
