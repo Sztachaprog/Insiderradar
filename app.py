@@ -832,7 +832,8 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
     @app.get("/wieloryby/token/<token>")
     def whale_token(token):
         data = whale_xtb(whales.build(wstore, include_treasury=True))
-        row = next((t for t in data["tokens"] if t["token"] == token.lower()), None)
+        token = whales.norm_key(token)
+        row = next((t for t in data["tokens"] if t["token"] == token), None)
         if row is None:
             abort(404)
         transfers = [b for b in wstore.transfers() if b["token"] == row["token"]]

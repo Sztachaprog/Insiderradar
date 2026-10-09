@@ -110,6 +110,12 @@ def tkey(chain: str, address: str) -> str:
     return address if chain == "ethereum" else f"{chain}-{address}"
 
 
+def norm_key(key: str) -> str:
+    """Canonical form of a token id from a URL: EVM parts lowercase, Solana mints keep their case."""
+    chain, _, address = (key or "").strip().rpartition("-")
+    return tkey(chain.lower() or "ethereum", address)
+
+
 def split_key(key: str) -> tuple[str, str]:
     return ("ethereum", key) if key.startswith("0x") else tuple(key.split("-", 1))
 

@@ -199,6 +199,8 @@ def test_token_keys_roundtrip():
     assert whales.tkey("base", "0xABC") == "base-0xabc"
     assert whales.split_key("base-0xabc") == ("base", "0xabc") and whales.split_key("0xabc") == ("ethereum", "0xabc")
     assert whales.explorer_for("arbitrum-0xabc") == "https://arbiscan.io"
+    assert whales.norm_key("0xABC") == "0xabc" and whales.norm_key("Base-0xABC") == "base-0xabc"
+    assert whales.norm_key("solana-JUPyiwrYJ") == "solana-JUPyiwrYJ"          # base58 is case-sensitive
 
 
 def test_scanner_covers_extra_chain_and_isolates_failures(tmp_path, monkeypatch):
