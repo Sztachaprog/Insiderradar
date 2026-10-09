@@ -12,7 +12,9 @@
         <div><small>Posiadaczy</small><b>{{ "{:,}".format(t.holders) if t.holders else "—" }}</b></div>
         <div><small>Kurs 7 dni</small><b class="{{ ('up' if t.ch7 >= 0 else 'down') if t.ch7 is not none }}">{{ t.ch7|pct }}</b></div>
       </div>
-      <p style="margin:12px 0 0"><a href="https://etherscan.io/token/{{ t.token }}" target="_blank" rel="noopener">Etherscan ↗</a></p>
+      <p style="margin:12px 0 0; display:flex; gap:12px; align-items:center"><a href="{{ t.explorer }}/token/{{ t.address }}" target="_blank" rel="noopener">{{ t.explorer.split('//')[1] }} ↗</a>
+        <span class="chip">{{ t.chain_label }}</span>
+        {% if t.xtb %}<a class="btn-xtb" href="{{ t.xtb }}" target="_blank" rel="noopener" style="padding:3px 10px">CFD na XTB ↗</a>{% endif %}</p>
       {% if t.signal %}
         <h2 style="margin-top:18px">Sygnał spot</h2>
         <p class="note">Wystawiony {{ t.signal.flagged_at|local }} przy cenie {{ t.signal.price|usd }} (ocena {{ t.signal.score }}).</p>

@@ -25,6 +25,7 @@ import crypto
 import form4_scanner as fs
 import market
 import whales
+import xtb
 
 SITE = Path("site")
 STATUS = Path("scan_status.json")  # scanner status from the scan step, shown by the export step
@@ -46,7 +47,8 @@ def scan(only: set[str], force_whales: bool):
     cstore = crypto.CryptoStore(webapp.DB_PATH)
     wstore = whales.WhaleStore(webapp.DB_PATH)
     ua = os.environ.get("SEC_USER_AGENT")
-    tracker = webapp.Tracker(store, market.YahooClient, sec_factory=(lambda: fs.SecClient(ua)) if ua else None)
+    tracker = webapp.Tracker(store, market.YahooClient, sec_factory=(lambda: fs.SecClient(ua)) if ua else None,
+                             xtb_factory=xtb.XtbClient)
     scanner = webapp.Scanner(store, lambda: fs.SecClient(ua), webapp.SCAN_PAGES, after_scan=tracker.refresh)
     cscanner = crypto.CryptoScanner(cstore, crypto.CoinGeckoClient)
     wscanner = whales.WhaleScanner(wstore, whales.BlockscoutClient)

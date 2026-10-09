@@ -5,7 +5,7 @@ name: Skan danych
 # and a read-only snapshot of the app is published to GitHub Pages.
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "7-59/10 * * * *"   # :07, :17, ... - GitHub delays/skips runs at the top of the hour most
   workflow_dispatch:
     inputs:
       whales:
@@ -34,6 +34,7 @@ jobs:
       FORM4_DB: form4.db
       SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+      BLOCKSCOUT_API_KEY: ${{ secrets.BLOCKSCOUT_API_KEY }}   # optional: whales on Base, Arbitrum, Optimism, Polygon
       # Smaller per-run budgets: runs are frequent, so coverage builds up over the day.
       HISTORY_PER_RUN: "2"
       CRYPTO_DETAILS_PER_RUN: "5"

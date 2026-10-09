@@ -36,6 +36,7 @@
         {% if d.twitter %}<a href="https://x.com/{{ d.twitter }}" target="_blank" rel="noopener">X @{{ d.twitter }} ↗</a>{% endif %}
         {% for g in d.github or [] %}<a href="{{ g }}" target="_blank" rel="noopener">GitHub ↗</a>{% endfor %}
         <a href="https://www.coingecko.com/en/coins/{{ r.coin_id }}" target="_blank" rel="noopener">CoinGecko ↗</a>
+        {% if r.xtb %}<a class="btn-xtb" href="{{ r.xtb }}" target="_blank" rel="noopener" style="padding:3px 10px">CFD na XTB ↗</a>{% endif %}
       </div>
       <div class="facts">
         <div><small>Kapitalizacja</small><b>{{ m.market_cap|money }}</b></div>

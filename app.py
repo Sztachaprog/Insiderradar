@@ -31,6 +31,7 @@ import market
 import signals
 import strategy
 import whales
+import xtb
 
 DB_PATH = Path(os.environ.get("FORM4_DB", Path(__file__).with_name("form4.db")))
 SCAN_PAGES = int(os.environ.get("SCAN_PAGES", "3"))
@@ -38,6 +39,8 @@ SCAN_INTERVAL_MIN = int(os.environ.get("SCAN_INTERVAL_MIN", "15"))
 TRACK_DAYS = int(os.environ.get("TRACK_DAYS", "120"))  # keep refreshing prices this long after adding
 BENCHMARK = "SPY"
 HISTORY_DAYS = 7          # re-check an insider's track record weekly
+XTB_PER_RUN = int(os.environ.get("XTB_PER_RUN", "20"))  # new tickers matched to XTB per scan
+XTB_RECHECK_DAYS = 14     # tickers not found on XTB are retried (XTB keeps adding US stocks)
 HISTORY_PER_RUN = int(os.environ.get("HISTORY_PER_RUN", "5"))  # insiders per scan (each up to ~40 SEC requests)
 CRYPTO_INTERVAL_MIN = int(os.environ.get("CRYPTO_INTERVAL_MIN", "15"))
 WHALE_INTERVAL_MIN = int(os.environ.get("WHALE_INTERVAL_MIN", "30"))
@@ -62,6 +65,10 @@ class Store:
                 PRIMARY KEY (ticker, date))""")
             c.execute("""CREATE TABLE IF NOT EXISTS companies (
                 ticker TEXT PRIMARY KEY, data TEXT NOT NULL, fetched_at TEXT NOT NULL)""")
+            c.execute("""CREATE TABLE IF NOT EXISTS xtb_links (
+                ticker TEXT PRIMARY KEY, stock TEXT, cfd TEXT, checked_at TEXT NOT NULL)""")
+            c.execute("""CREATE TABLE IF NOT EXISTS xtb_catalog (
+                kind TEXT NOT NULL, slug TEXT NOT NULL, fetched_at TEXT NOT NULL, PRIMARY KEY (kind, slug))""")
             c.execute("""CREATE TABLE IF NOT EXISTS insider_history (
                 owner_cik TEXT PRIMARY KEY, data TEXT NOT NULL, fetched_at TEXT NOT NULL)""")
             calibration.ensure_table(c)
@@ -142,6 +149,30 @@ class Store:
         with self._conn() as c:
             return calibration.load_weights(c, "stocks")
 
+    def xtb_links(self) -> dict[str, dict]:
+        with self._conn() as c:
+            return {t: {"stock": s, "cfd": f, "checked_at": at}
+                    for t, s, f, at in c.execute("SELECT ticker, stock, cfd, checked_at FROM xtb_links")}
+
+    def save_xtb_link(self, ticker: str, links: dict) -> None:
+        with self._conn() as c:
+            c.execute("INSERT OR REPLACE INTO xtb_links VALUES (?, ?, ?, ?)",
+                      (ticker, links.get("stock"), links.get("cfd"), datetime.now().isoformat(timespec="seconds")))
+
+    def xtb_catalog(self, kind: str) -> set[str]:
+        with self._conn() as c:
+            return {r[0] for r in c.execute("SELECT slug FROM xtb_catalog WHERE kind = ?", (kind,))}
+
+    def xtb_catalog_age(self) -> str:
+        with self._conn() as c:
+            return c.execute("SELECT MIN(fetched_at) FROM xtb_catalog").fetchone()[0] or ""
+
+    def save_xtb_catalog(self, kind: str, slugs: set[str]) -> None:
+        now = datetime.now().isoformat(timespec="seconds")
+        with self._conn() as c:
+            c.execute("DELETE FROM xtb_catalog WHERE kind = ?", (kind,))
+            c.executemany("INSERT INTO xtb_catalog VALUES (?, ?, ?)", [(kind, sl, now) for sl in slugs])
+
     def set_weights(self, weights: dict | None) -> None:
         with self._conn() as c:
             calibration.save_weights(c, "stocks", weights)
@@ -156,10 +187,12 @@ def tradeable(f: fs.Filing) -> bool:
 class Tracker:
     """After each scan: snapshot the price of newly added filings, refresh closes, fetch profiles."""
 
-    def __init__(self, store: Store, client_factory, track_days: int = TRACK_DAYS, sec_factory=None):
+    def __init__(self, store: Store, client_factory, track_days: int = TRACK_DAYS, sec_factory=None,
+                 xtb_factory=None):
         self.store = store
         self.client_factory = client_factory
         self.sec_factory = sec_factory
+        self.xtb_factory = xtb_factory
         self.track_days = track_days
         self.last_run: str | None = None
         self.last_error: str | None = None
@@ -203,9 +236,31 @@ class Tracker:
 
         if self.sec_factory:
             self.refresh_histories(client, filings, today)
+        if self.xtb_factory:
+            try:
+                self.refresh_xtb(filings, today)
+            except Exception:
+                pass  # XTB links are a convenience; never block prices
 
         self.last_run = datetime.now().strftime("%H:%M:%S")
         self.last_error = f"brak cen dla {len(errors)} tickerów" if errors else None
+
+    def refresh_xtb(self, filings: list[fs.Filing], today: date) -> None:
+        """Match tickers to XTB instrument pages (sitemap catalog refreshed daily)."""
+        client = self.xtb_factory()
+        if self.store.xtb_catalog_age() < (today - timedelta(days=1)).isoformat():
+            for kind in xtb.SITEMAPS:
+                self.store.save_xtb_catalog(kind, client.catalog(kind))
+        catalogs = {k: self.store.xtb_catalog(k) for k in ("stock", "cfd")}
+        links = self.store.xtb_links()
+        retry = (today - timedelta(days=XTB_RECHECK_DAYS)).isoformat()
+        todo = {}
+        for f in filings:
+            known = links.get(f.ticker)
+            if not known or (not known["stock"] and not known["cfd"] and known["checked_at"] < retry):
+                todo.setdefault(f.ticker, f.issuer)
+        for ticker, issuer in list(todo.items())[:XTB_PER_RUN]:
+            self.store.save_xtb_link(ticker, xtb.resolve_stock(client, ticker, issuer, catalogs))
 
     def refresh_histories(self, yahoo, filings: list[fs.Filing], today: date) -> None:
         """Track record of insiders who bought: their earlier buys and how those went."""
@@ -290,7 +345,7 @@ def _float(value: str | None) -> float | None:
         return None
 
 
-EMPTY_MARKET = {"tracked": {}, "prices": {}, "companies": {}, "histories": {}, "weights": {}}
+EMPTY_MARKET = {"tracked": {}, "prices": {}, "companies": {}, "histories": {}, "weights": {}, "xtb": {}}
 
 
 def sparkline(path: list[tuple[str, float]], w: int = 84, h: int = 26) -> dict | None:
@@ -316,6 +371,7 @@ def build_rows(filings: list[fs.Filing], args, market_data=EMPTY_MARKET) -> tupl
     query = (args.get("q") or "").strip().lower()
     min_score = {"medium": 35, "strong": 60}.get(args.get("signal", ""), 0)
     kind_filter = args.get("kind", "")
+    xtb_only = args.get("xtb") == "1"
 
     hits = []
     for f in filings:
@@ -362,7 +418,10 @@ def build_rows(filings: list[fs.Filing], args, market_data=EMPTY_MARKET) -> tupl
             "price_now": closes[-1][1] if closes else None,
             "base_date": None, "base_price": None,
             "perf": None, "spark": None,
+            "xtb": {k: v for k, v in (md["xtb"].get(f.ticker) or {}).items() if k in ("stock", "cfd") and v},
         }
+        if xtb_only and not row["xtb"]:
+            continue
         if f.accession in tracked:
             _, row["base_date"], row["base_price"] = tracked[f.accession]
             row["perf"] = market.performance(closes, row["base_date"], row["base_price"], bench)
@@ -465,6 +524,7 @@ def build_crypto_rows(cdata: dict, args) -> tuple[list[dict], dict]:
         points = prices.get(e["coin_id"], [])
         perf = crypto.performance(e, points, bench)
         rows.append({**e, "signal": sig, "details": details or {}, "perf": perf,
+                     "xtb": xtb.crypto_url(e["coin_id"], e["name"], cdata.get("xtb_crypto") or set()),
                      "spark": sparkline(perf["path"]), "mcap": mcap,
                      "price_now": points[-1][1] if points else None,
                      "ch1h": (m.get("price_change_percentage_1h_in_currency") or 0) / 100,
@@ -546,7 +606,8 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         ua = os.environ.get("SEC_USER_AGENT") or ("viewer only@example.com" if not start_background else None)
         if not ua:
             raise SystemExit('Set SEC_USER_AGENT, e.g. $env:SEC_USER_AGENT = "Jan Kowalski jan@example.com"')
-        tracker = tracker or Tracker(store, market.YahooClient, sec_factory=lambda: fs.SecClient(ua))
+        tracker = tracker or Tracker(store, market.YahooClient, sec_factory=lambda: fs.SecClient(ua),
+                                     xtb_factory=xtb.XtbClient)
         scanner = Scanner(store, lambda: fs.SecClient(ua), SCAN_PAGES, after_scan=tracker.refresh)
     wstore = whale_store or whales.WhaleStore(store.path)
     if whale_scanner is None:
@@ -560,11 +621,11 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
 
     def market_data():
         return {"tracked": store.tracked(), "prices": store.prices(), "companies": store.companies(),
-                "histories": store.histories(), "weights": store.weights()}
+                "histories": store.histories(), "weights": store.weights(), "xtb": store.xtb_links()}
 
     def crypto_data():
         return {"events": cstore.events(), "prices": cstore.prices(), "coins": cstore.coins(),
-                "weights": cstore.weights()}
+                "weights": cstore.weights(), "xtb_crypto": store.xtb_catalog("crypto")}
 
     def common(**extra):
         return {"scanner": scanner, "tracker": tracker, "crypto_scanner": crypto_scanner,
@@ -747,9 +808,15 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
 
     # ----- whales -----
 
+    def whale_xtb(data: dict) -> dict:
+        cat = store.xtb_catalog("crypto")
+        for t in data["tokens"]:
+            t["xtb"] = xtb.crypto_url((t["symbol"] or "").lower(), t["name"] or "", cat)
+        return data
+
     @app.get("/wieloryby")
     def whales_index():
-        data = whales.build(wstore, include_treasury=request.args.get("treasury") == "1")
+        data = whale_xtb(whales.build(wstore, include_treasury=request.args.get("treasury") == "1"))
         min_usd = _float(request.args.get("min_tx")) or whales.BIG_TX_USD
         big = [b for b in data["big"] if (b["usd"] or 0) >= min_usd]
         tone = request.args.get("tone", "")
@@ -760,13 +827,14 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
 
     @app.get("/wieloryby/token/<token>")
     def whale_token(token):
-        data = whales.build(wstore, include_treasury=True)
+        data = whale_xtb(whales.build(wstore, include_treasury=True))
         row = next((t for t in data["tokens"] if t["token"] == token.lower()), None)
         if row is None:
             abort(404)
         transfers = [b for b in wstore.transfers() if b["token"] == row["token"]]
         for t in transfers:
             t["text"], t["tone"] = whales.describe_transfer(t)
+            t["explorer"] = whales.explorer_for(t["token"])
         whale_map = wstore.whales()
         points = wstore.token_prices().get(row["token"], [])
         return render_template("whale_token.html", t=row, transfers=transfers[:150], whale_map=whale_map,
@@ -783,6 +851,7 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         transfers = [t for t in wstore.transfers() if t["address"] == address]
         for t in transfers:
             t["text"], t["tone"] = whales.describe_transfer(t)
+            t["explorer"] = whales.explorer_for(t["token"])
         return render_template("whale_wallet.html", w=w, transfers=transfers[:150], **common(page="whales"))
 
     @app.post("/wieloryby/dodaj")

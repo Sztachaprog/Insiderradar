@@ -28,7 +28,7 @@
         {% for t in d.tokens %}
           <tr onclick="location.href='{{ url_for('whale_token', token=t.token) }}'">
             <td><div class="token">{% if t.icon %}<img src="{{ t.icon }}" alt="" loading="lazy">{% endif %}
-              <div><b class="mono">{{ t.symbol }}</b><span class="sub">{{ t.name }} · {{ t.mcap|money }}</span></div></div></td>
+              <div><b class="mono">{{ t.symbol }}</b>{% set r = t %}{% if r.xtb %}<a class="xtb" href="{{ r.xtb }}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="CFD na XTB">XTB ↗</a>{% endif %}<span class="sub">{{ t.name }} · {{ t.mcap|money }}{% if t.chain != 'ethereum' %} · {{ t.chain_label }}{% endif %}</span></div></div></td>
             <td><span class="badge {{ t.level }}"><i>{{ t.score }}</i>{{ t.label }}</span>{% if t.signal %}<span class="kind">sygnał spot od {{ t.signal.flagged_at|local("%d.%m") }}</span>{% endif %}</td>
             <td class="num">{{ t.whales }}<span class="sub">{{ t.whale_usd|money }}</span></td>
             <td class="num">{% if t.acc %}<b class="up">▲ {{ t.acc }}</b>{% else %}<span class="muted">0</span>{% endif %}</td>
@@ -74,7 +74,7 @@
             <td class="num"><b>{{ b.usd|money }}</b></td>
             <td style="white-space:normal"><span class="{{ b.tone if b.tone != 'flat' else 'muted' }}">{{ {'up': '▲ ', 'down': '▼ '}.get(b.tone, '') }}{{ b.text }}</span></td>
             <td>{{ b.cp_label or (b.counterparty|short) }}<span class="sub">{{ {'exchange': 'giełda', 'contract': 'kontrakt / DEX', 'wallet': 'portfel', 'safe': 'multisig'}.get(b.cp_kind, b.cp_kind) }}</span></td>
-            <td><a href="https://etherscan.io/tx/{{ b.tx }}" target="_blank" rel="noopener" onclick="event.stopPropagation()">tx ↗</a></td>
+            <td><a href="{{ b.explorer }}/tx/{{ b.tx }}" target="_blank" rel="noopener" onclick="event.stopPropagation()">tx ↗</a></td>
           </tr>
         {% endfor %}
         </tbody>

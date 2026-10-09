@@ -27,6 +27,11 @@
         <span class="muted">{{ company.name or r.issuer }}</span>
         {% if company.exchange %}<span class="chip">{{ company.exchange }}</span>{% endif %}
       </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px">
+        {% if r.xtb.stock %}<a class="btn-xtb" href="{{ r.xtb.stock }}" target="_blank" rel="noopener">Kup akcje na XTB ↗</a>{% endif %}
+        {% if r.xtb.cfd %}<a class="btn-xtb {{ 'alt' if r.xtb.stock }}" href="{{ r.xtb.cfd }}" target="_blank" rel="noopener">CFD na XTB ↗</a>{% endif %}
+        {% if not r.xtb %}<span class="chip" title="Sprawdzane automatycznie co skan; nowe spółki XTB dodaje regularnie">brak na XTB (na razie)</span>{% endif %}
+      </div>
       <div class="muted" style="margin-top:4px">
         {{ company.sector or "sektor nieznany" }}{% if company.industry %} · {{ company.industry }}{% endif %}
         {% if company.country %} · {{ company.country }}{% endif %}

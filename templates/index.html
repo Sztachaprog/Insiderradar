@@ -34,6 +34,7 @@
     </label>
     <label class="check"><input type="checkbox" name="all_owners" value="1" {% if args.get('all_owners') == '1' %}checked{% endif %}> 10% udziałowcy też</label>
     <label class="check"><input type="checkbox" name="plan" value="1" {% if args.get('plan') == '1' %}checked{% endif %}> Plany 10b5-1 też</label>
+    <label class="check"><input type="checkbox" name="xtb" value="1" {% if args.get('xtb') == '1' %}checked{% endif %}> Tylko dostępne na XTB</label>
     <input type="hidden" name="sort" value="{{ args.get('sort', 'value') }}">
     <button class="primary">Filtruj</button>
   </form>
@@ -72,7 +73,7 @@
         {% set link = url_for('filing', accession=r.accession) %}
         <tr onclick="location.href='{{ link }}'">
           <td class="mono">{{ r.date }}</td>
-          <td class="ticker"><a href="{{ link }}" style="color:inherit;text-decoration:none"><b>{{ r.ticker }}</b></a>
+          <td class="ticker"><a href="{{ link }}" style="color:inherit;text-decoration:none"><b>{{ r.ticker }}</b></a>{% if r.xtb %}<a class="xtb" href="{{ r.xtb.stock or r.xtb.cfd }}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="{{ 'Akcje na XTB' if r.xtb.stock else 'CFD na XTB' }}">XTB ↗</a>{% endif %}
             <small title="{{ r.issuer }}">{{ r.issuer }}</small>
             {% if r.sector %}<small>{{ r.sector }}{% if r.market_cap %} · {{ r.market_cap|money }}{% endif %}</small>{% endif %}</td>
           <td>{% if r.signal.score is not none %}<span class="badge {{ r.signal.level }}"><i>{{ r.signal.score }}</i>{{ r.signal.label }}</span>{% else %}<span class="muted">—</span>{% endif %}

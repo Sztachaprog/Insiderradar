@@ -17,7 +17,7 @@
           <td class="num">{{ b.usd|money }}</td>
           <td style="white-space:normal"><span class="{{ b.tone if b.tone != 'flat' else 'muted' }}">{{ {'up': '▲ ', 'down': '▼ '}.get(b.tone, '') }}{{ b.text }}</span></td>
           <td>{{ b.cp_label or (b.counterparty|short) }}<span class="sub">{{ {'exchange': 'giełda', 'contract': 'kontrakt / DEX', 'wallet': 'portfel', 'safe': 'multisig'}.get(b.cp_kind, b.cp_kind) }}</span></td>
-          <td><a href="https://etherscan.io/tx/{{ b.tx }}" target="_blank" rel="noopener">tx ↗</a></td>
+          <td><a href="{{ b.explorer or 'https://etherscan.io' }}/tx/{{ b.tx }}" target="_blank" rel="noopener">tx ↗</a></td>
         </tr>
       {% endfor %}
       </tbody>

@@ -28,6 +28,7 @@ Otwórz http://127.0.0.1:5000. Po starcie aplikacja od razu robi pierwszy skan (
 - **Krypto** (`/krypto`): radar dużych ruchów na mniejszych tokenach z CoinGecko (kapitalizacja $3 mln–$1,5 mld). Ruch trafia na listę przy ±25% w 24h, ±10% w 1h, wolumenie powyżej 60% kapitalizacji albo gdy token jest trending. Każdy ruch dostaje ocenę potencjału z powodami (wolumen, parabola, odblokowania FDV, odległość od ATH, GitHub, społeczność, memecoin, narracja), opis projektu i linki. Cena z chwili wykrycia jest punktem startu, a **Krypto wyniki** pokazują wynik po 1h, 24h, 3 i 7 dniach, wynik względem BTC, trafność kierunku (czy ocena 50+ faktycznie rosła) i kalibrację.
 - **Strategie** (`/krypto/strategie`): symulacja transakcji dziennych na wykrytych ruchach krypto. Każda strategia ma warunki wejścia (typ ruchu, ocena, kapitalizacja, zmiana 24h, wolumen), take-profit, stop-loss, maksymalny czas trzymania i koszt transakcji. Wynik pokazuje trafność, średni wynik netto, profit factor, wynik w $, obsunięcie, krzywą kapitału i listę transakcji. Jest 6 gotowych strategii, edytor do tworzenia i zapisywania własnych oraz lista „Okazje teraz” ze świeżymi ruchami pasującymi do strategii.
 - **Wieloryby** (`/wieloryby`): baza dużych portfeli na Ethereum (co najmniej $1 mln w jednym z ~140 największych tokenów; dane z Blockscout, bez klucza). Giełdy, pule DEX i mosty są odfiltrowane, a portfele zespołów i skarbców (≥ 5% podaży albo grupy identycznych sald) oznaczone osobno. Za zakup lub sprzedaż liczy się tylko przepływ z giełdą albo DEX-em. Widać tokeny akumulowane przez wieloryby z oceną, duże transakcje (≥ $1 mln) z interpretacją (wypłata z giełdy, wpłata na giełdę, DEX) i strony portfeli i tokenów. Od oceny 60 token dostaje sygnał spot z zapisaną ceną i wynikiem po 7, 30 i 90 dniach. Możesz też dodać własny portfel do śledzenia.
+- **XTB**: przy tickerach i tokenach dostępnych na XTB jest znaczek **XTB ↗**, który prowadzi prosto do strony instrumentu. Na stronie spółki są przyciski „Kup akcje na XTB” i „CFD na XTB”, a w filtrach opcja „Tylko dostępne na XTB”. Lista instrumentów pochodzi z mapy strony XTB (odświeżana raz dziennie), a dopasowanie tickera jest weryfikowane po symbolu na stronie XTB. Spółki, których XTB nie ma, są sprawdzane ponownie co 14 dni.
 - **Czas**: godziny krypto i wielorybów są pokazywane w czasie polskim (CEST latem, CET zimą; zmienna `APP_TZ`).
 - **Wyniki** (`/wyniki`): średni wynik, trafność, średni zysk i strata, mediana i wynik vs SPY dla każdego horyzontu, a do tego wykres średniej ścieżki i rozkładu wyników. Liczone dla tych samych filtrów co w Skanerze, więc da się np. sprawdzić, czy *silne* sygnały faktycznie zarabiają więcej niż *słabe*.
 - **API**: `/api/filings` zwraca wyniki w JSON i przyjmuje te same parametry co strona. `/api/status` zwraca stan skanera.
@@ -45,6 +46,7 @@ Ustawienia przez zmienne środowiskowe:
 | `CRYPTO_MIN_MCAP` / `CRYPTO_MAX_MCAP` | `3e6` / `1.5e9` | zakres kapitalizacji radaru |
 | `WHALE_INTERVAL_MIN` | `30` | co ile minut skanować portfele wielorybów |
 | `WHALE_TOKENS` / `WHALE_MIN_USD` | `150` / `1e6` | ile tokenów przeglądać i od jakiej kwoty portfel jest wielorybem |
+| `BLOCKSCOUT_API_KEY` | brak | darmowy klucz z dev.blockscout.com: wieloryby także na Base, Arbitrum, Optimism i Polygon |
 | `COINGECKO_API_KEY` | brak | darmowy klucz „Demo” z CoinGecko przyspiesza skan (bez klucza około 3–4 min) |
 
 ### Linia komend
@@ -72,6 +74,7 @@ Jednorazowa konfiguracja na GitHubie:
 1. **Settings → General → Danger Zone → Change visibility → Public.** Publiczne repo ma darmowe, nielimitowane minuty Actions. Prywatne ma 2000 min/mies., a ten workflow zużywa ok. 10 tys. GitHub Pages na darmowym koncie też działa tylko dla publicznych repo.
 2. **Settings → Secrets and variables → Actions → New repository secret:**
    - `SEC_USER_AGENT`: np. `Imie Nazwisko twoj@mail.com` (wymóg SEC; jako sekret nie jest widoczny publicznie),
+   - `BLOCKSCOUT_API_KEY` (opcjonalny): darmowy klucz z dev.blockscout.com, który rozszerza wieloryby o Base, Arbitrum, Optimism i Polygon,
    - `COINGECKO_API_KEY`: darmowy klucz „Demo” z coingecko.com/en/api. Opcjonalny, ale bez niego CoinGecko często blokuje serwery GitHuba.
 3. **Settings → Pages → Build and deployment → Source: GitHub Actions.**
 4. **Actions → Skan danych → Run workflow**, żeby uruchomić pierwszy skan od razu.

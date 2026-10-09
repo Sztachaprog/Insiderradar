@@ -72,7 +72,7 @@
       <tbody>
       {% for r in perf.rows %}
         <tr onclick="location.href='{{ url_for('filing', accession=r.accession) }}'">
-          <td class="ticker"><b>{{ r.ticker }}</b><small>{{ r.owner }}</small></td>
+          <td class="ticker"><b>{{ r.ticker }}</b>{% if r.xtb %}<a class="xtb" href="{{ r.xtb.stock or r.xtb.cfd }}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="{{ 'Akcje na XTB' if r.xtb.stock else 'CFD na XTB' }}">XTB ↗</a>{% endif %}<small>{{ r.owner }}</small></td>
           <td>{% if r.signal.score is not none %}<span class="badge {{ r.signal.level }}"><i>{{ r.signal.score }}</i>{{ r.signal.label }}</span>{% endif %}</td>
           <td class="mono">{{ r.base_date }}</td>
           <td class="num">${{ "%.2f"|format(r.base_price) }}</td>

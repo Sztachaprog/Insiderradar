@@ -175,3 +175,57 @@ def test_manual_wallet_and_pages(tmp_path):
     assert "Niepoprawny" in c.post("/wieloryby/dodaj", data={"address": "nope"}, follow_redirects=True).get_data(as_text=True)
     c.post(f"/wieloryby/{fund}/usun")
     assert fund not in wstore.whales()
+
+
+# ---------- multi-chain (Blockscout PRO key) ----------
+
+def test_chains_need_key(monkeypatch):
+    monkeypatch.delenv("BLOCKSCOUT_API_KEY", raising=False)
+    monkeypatch.delenv("WHALE_CHAINS", raising=False)
+    assert whales.active_chains() == ["ethereum"]
+    with pytest.raises(ValueError):
+        whales.BlockscoutClient("base")
+    monkeypatch.setenv("BLOCKSCOUT_API_KEY", "proapi_x")
+    assert whales.active_chains() == ["ethereum", "base", "arbitrum", "optimism", "polygon"]
+    base = whales.BlockscoutClient("base")
+    assert base.base == "https://api.blockscout.com/8453/api/v2" and base.params == {"apikey": "proapi_x"}
+    assert whales.BlockscoutClient("ethereum").base == whales.PUBLIC_ETH            # no credits spent on Ethereum
+    monkeypatch.setenv("WHALE_CHAINS", "ethereum,base,nope")
+    assert whales.active_chains() == ["ethereum", "base"]
+
+
+def test_token_keys_roundtrip():
+    assert whales.tkey("ethereum", "0xABC") == "0xabc"
+    assert whales.tkey("base", "0xABC") == "base-0xabc"
+    assert whales.split_key("base-0xabc") == ("base", "0xabc") and whales.split_key("0xabc") == ("ethereum", "0xabc")
+    assert whales.explorer_for("arbitrum-0xabc") == "https://arbiscan.io"
+
+
+def test_scanner_covers_extra_chain_and_isolates_failures(tmp_path, monkeypatch):
+    monkeypatch.setenv("BLOCKSCOUT_API_KEY", "proapi_x")
+    monkeypatch.setenv("WHALE_CHAINS", "ethereum,base,arbitrum")
+    store = whales.WhaleStore(tmp_path / "w.db")
+
+    class ChainScout(FakeScout):  # real transaction hashes never repeat across chains
+        def __init__(self, chain):
+            super().__init__()
+            self.chain = chain
+
+        def transfers(self, address, token=None):
+            return [dict(x, transaction_hash=f"0x{self.chain}") for x in super().transfers(address, token)]
+
+    def factory(chain):
+        if chain == "arbitrum":
+            raise RuntimeError("402 out of credits")
+        return ChainScout(chain)
+
+    sc = whales.WhaleScanner(store, factory)
+    sc.run_once(now=NOW)
+    assert set(store.tokens()) == {TOK, f"base-{TOK}"}
+    assert store.tokens()[f"base-{TOK}"]["chain"] == "base"
+    assert {t["token"] for t in store.transfers()} == {TOK, f"base-{TOK}"}
+    assert sc.last_error.startswith("arbitrum: RuntimeError")
+    d = whales.build(store, NOW)
+    base_row = next(t for t in d["tokens"] if t["chain"] == "base")
+    assert base_row["explorer"] == "https://basescan.org" and base_row["address"] == TOK
+    assert {b["explorer"] for b in d["big"]} == {"https://etherscan.io", "https://basescan.org"}
