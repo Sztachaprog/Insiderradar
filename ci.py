@@ -24,6 +24,9 @@ import app as webapp
 import crypto
 import form4_scanner as fs
 import market
+import news
+import notify
+import strategy
 import safety
 import whales
 import xtb
@@ -51,7 +54,7 @@ def scan(only: set[str], force_whales: bool):
     tracker = webapp.Tracker(store, market.YahooClient, sec_factory=(lambda: fs.SecClient(ua)) if ua else None,
                              xtb_factory=xtb.XtbClient)
     scanner = webapp.Scanner(store, lambda: fs.SecClient(ua), webapp.SCAN_PAGES, after_scan=tracker.refresh)
-    cscanner = crypto.CryptoScanner(cstore, crypto.CoinGeckoClient)
+    cscanner = crypto.CryptoScanner(cstore, crypto.CoinGeckoClient, news_factory=news.NewsClient)
     wscanner = whales.WhaleScanner(wstore, whales.BlockscoutClient)
 
     if "stocks" in only:
@@ -146,6 +149,66 @@ def export(parts, base_path: str) -> int:
         whales.build = original_build
 
 
+def site_url() -> str:
+    repo = os.environ.get("GITHUB_REPOSITORY", "owner/repo")
+    owner, name = repo.split("/", 1)
+    return os.environ.get("SITE_URL") or f"https://{owner.lower()}.github.io/{name}"
+
+
+# Presets that would alert on nearly everything (baseline) or are a deliberate loser (control).
+NO_ALERT_STRATEGIES = {"all", "chase"}
+
+
+def collect_alerts(parts, now=None) -> list[tuple[str, str]]:
+    store, cstore, wstore = parts[0], parts[1], parts[2]
+    now = now or crypto.utcnow()
+    site = site_url()
+    alerts: list[tuple[str, str]] = []
+
+    # Insider buys added in the last 2 days (older ones were either sent or are stale news).
+    md = {"tracked": store.tracked(), "prices": store.prices(), "companies": store.companies(),
+          "histories": store.histories(), "weights": store.weights(), "xtb": store.xtb_links()}
+    recent = (datetime.now() - timedelta(days=2)).isoformat()
+    added = store.added()
+    rows, _ = webapp.build_rows(store.all(), {"code": "P", "min": "100000"}, md)
+    alerts += notify.stock_alerts([r for r in rows if added.get(r["accession"], "") >= recent], site)
+
+    # Crypto moves from the last 2 hours: strong score, or an entry for a saved/preset strategy.
+    cdata = {"events": cstore.events(), "prices": cstore.prices(), "coins": cstore.coins(), "weights": cstore.weights(),
+             "xtb_crypto": store.xtb_catalog("crypto"), "news": cstore.news()}
+    crows, _ = webapp.build_crypto_rows(cdata, {})
+    fresh = [r for r in crows if crypto.parse_iso(r["detected_at"]) >= now - timedelta(hours=2)]
+    catalog = [(name, params) for key, name, _, params in strategy.PRESETS if key not in NO_ALERT_STRATEGIES]
+    catalog += [(s["name"], s["params"]) for s in cstore.strategies()]
+    hits: dict[int, list[str]] = {}
+    for name, params in catalog:
+        for r in fresh:
+            if strategy.matches(r, params):
+                hits.setdefault(r["id"], []).append(name)
+    alerts += notify.crypto_alerts(fresh, site, hits)
+
+    # Whale spot signals and big accumulation / distribution transfers.
+    data = whales.build(wstore)
+    cat = store.xtb_catalog("crypto")
+    for t in data["tokens"]:
+        t["xtb"] = xtb.crypto_url((t["symbol"] or "").lower(), t["name"] or "", cat)
+    data["big"] = [b for b in data["big"] if b["ts"] >= crypto.iso(now - timedelta(days=2))]
+    alerts += notify.whale_alerts(data, site)
+    return alerts
+
+
+def send_alerts(parts) -> None:
+    if not notify.configured():
+        log("telegram: pominięte, brak sekretów TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID")
+        return
+    try:
+        alerts = collect_alerts(parts)
+        result = notify.deliver(alerts, notify.Outbox(webapp.DB_PATH), notify.Telegram())
+        log(f"telegram: wysłane {result['sent']}, pominięte {result['skipped']}, start {result['baseline']}")
+    except Exception as exc:  # alerts must never break the scan or the data save
+        log(f"telegram: błąd {safety.safe_error(exc)}")
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--only", default="stocks,crypto,whales")
@@ -156,6 +219,8 @@ def main(argv=None) -> int:
                    or "/" + os.environ.get("GITHUB_REPOSITORY", "/").split("/")[-1])
     args = p.parse_args(argv)
     parts = scan(set() if args.no_scan else set(args.only.split(",")), args.whales)
+    if not args.no_scan:
+        send_alerts(parts)
     if args.no_export:
         return 0
     return 1 if export(parts, args.base) else 0

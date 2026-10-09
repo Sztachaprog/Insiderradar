@@ -31,6 +31,8 @@ MAX_MCAP = float(os.environ.get("CRYPTO_MAX_MCAP", "1.5e9"))      # "smaller tok
 MIN_VOLUME = 200_000
 TRACK_DAYS = 30
 DETAILS_PER_RUN = int(os.environ.get("CRYPTO_DETAILS_PER_RUN", "8"))  # project info calls per scan
+NEWS_PER_RUN = int(os.environ.get("CRYPTO_NEWS_PER_RUN", "8"))        # Google News searches per scan
+NEWS_MAX_AGE_H = 6
 DEDUPE_HOURS = 72                                                  # one event per coin per 3 days
 BENCHMARK = "bitcoin"
 HORIZONS = [(1, "1 h"), (24, "24 h"), (72, "3 dni"), (168, "7 dni")]
@@ -138,6 +140,8 @@ class CryptoStore:
                 coin_id TEXT NOT NULL, ts TEXT NOT NULL, price REAL NOT NULL, PRIMARY KEY (coin_id, ts))""")
             c.execute("""CREATE TABLE IF NOT EXISTS crypto_coins (
                 coin_id TEXT PRIMARY KEY, data TEXT NOT NULL, fetched_at TEXT NOT NULL)""")
+            c.execute("""CREATE TABLE IF NOT EXISTS crypto_news (
+                coin_id TEXT PRIMARY KEY, items TEXT NOT NULL, fetched_at TEXT NOT NULL)""")
             c.execute("""CREATE TABLE IF NOT EXISTS crypto_strategies (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, params TEXT NOT NULL,
                 created_at TEXT NOT NULL)""")
@@ -182,6 +186,15 @@ class CryptoStore:
         with self._conn() as c:
             c.execute("INSERT OR REPLACE INTO crypto_coins VALUES (?, ?, ?)",
                       (coin_id, json.dumps(data), iso(utcnow())))
+
+    def save_news(self, coin_id: str, items: list[dict]) -> None:
+        with self._conn() as c:
+            c.execute("INSERT OR REPLACE INTO crypto_news VALUES (?, ?, ?)", (coin_id, json.dumps(items), iso(utcnow())))
+
+    def news(self) -> dict[str, dict]:
+        with self._conn() as c:
+            return {k: {"items": json.loads(v), "fetched_at": t}
+                    for k, v, t in c.execute("SELECT coin_id, items, fetched_at FROM crypto_news")}
 
     def coins(self) -> dict[str, dict]:
         with self._conn() as c:
@@ -445,7 +458,8 @@ def average_path(perfs: list[dict], hours: int = 168, step: int = 6) -> list[tup
 # ---------- Background runner ----------
 
 class CryptoScanner:
-    def __init__(self, store: CryptoStore, client_factory, pages: int = PAGES):
+    def __init__(self, store: CryptoStore, client_factory, pages: int = PAGES, news_factory=None):
+        self.news_factory = news_factory
         self.store = store
         self.client_factory = client_factory
         self.pages = pages
@@ -510,6 +524,20 @@ class CryptoScanner:
                 self.store.save_coin(cid, client.coin(cid))
             except Exception:
                 pass
+
+        # Headlines for fresh moves ("why is it moving?"); refreshed every few hours while the move is recent.
+        if self.news_factory:
+            have = self.store.news()
+            fresh = [e for e in events if parse_iso(e["detected_at"]) >= now - timedelta(hours=24)]
+            stale = iso(now - timedelta(hours=NEWS_MAX_AGE_H))
+            todo = [e for e in fresh if have.get(e["coin_id"], {}).get("fetched_at", "") < stale]
+            if todo:
+                reader = self.news_factory()
+                for e in list({e["coin_id"]: e for e in todo}.values())[:NEWS_PER_RUN]:
+                    try:
+                        self.store.save_news(e["coin_id"], reader.search(e["name"], e["symbol"]))
+                    except Exception:
+                        pass  # news are optional
 
         # Fill gaps (app was off) from CoinGecko hourly history, so horizons and
         # strategy simulations see a continuous path for the first week after detection.

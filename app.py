@@ -30,6 +30,8 @@ import history
 import market
 import signals
 import safety
+import news
+import notify
 import strategy
 import whales
 import xtb
@@ -526,6 +528,7 @@ def build_crypto_rows(cdata: dict, args) -> tuple[list[dict], dict]:
         perf = crypto.performance(e, points, bench)
         rows.append({**e, "signal": sig, "details": details or {}, "perf": perf,
                      "xtb": xtb.crypto_url(e["coin_id"], e["name"], cdata.get("xtb_crypto") or set()),
+                     "news": (cdata.get("news") or {}).get(e["coin_id"], {}).get("items", []),
                      "spark": sparkline(perf["path"]), "mcap": mcap,
                      "price_now": points[-1][1] if points else None,
                      "ch1h": (m.get("price_change_percentage_1h_in_currency") or 0) / 100,
@@ -614,7 +617,7 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
     if whale_scanner is None:
         whale_scanner = whales.WhaleScanner(wstore, whales.BlockscoutClient)
     if crypto_scanner is None:
-        crypto_scanner = crypto.CryptoScanner(cstore, crypto.CoinGeckoClient)
+        crypto_scanner = crypto.CryptoScanner(cstore, crypto.CoinGeckoClient, news_factory=news.NewsClient)
     if start_background:
         threading.Thread(target=scanner.loop, args=(SCAN_INTERVAL_MIN * 60,), daemon=True).start()
         threading.Thread(target=crypto_scanner.loop, args=(CRYPTO_INTERVAL_MIN * 60,), daemon=True).start()
@@ -626,7 +629,7 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
 
     def crypto_data():
         return {"events": cstore.events(), "prices": cstore.prices(), "coins": cstore.coins(),
-                "weights": cstore.weights(), "xtb_crypto": store.xtb_catalog("crypto")}
+                "weights": cstore.weights(), "xtb_crypto": store.xtb_catalog("crypto"), "news": cstore.news()}
 
     def common(**extra):
         return {"scanner": scanner, "tracker": tracker, "crypto_scanner": crypto_scanner,

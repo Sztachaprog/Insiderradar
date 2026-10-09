@@ -64,7 +64,7 @@
           <td class="mono">{{ r.detected_at|local("%H:%M") }}<span class="sub">{{ r.detected_at|local("%d.%m") }} · {{ r.detected_at|ago }}</span></td>
           <td><div class="token">{% if r.image %}<img src="{{ r.image }}" alt="" loading="lazy">{% endif %}
             <div><a href="{{ link }}" style="color:inherit;text-decoration:none"><b class="mono">{{ r.symbol }}</b></a>{% if r.xtb %}<a class="xtb" href="{{ r.xtb }}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="CFD na XTB">XTB ↗</a>{% endif %}
-              <span class="sub">{{ r.name }}{% if r.metrics.market_cap_rank %} · #{{ r.metrics.market_cap_rank }}{% endif %}</span></div></div></td>
+              <span class="sub">{{ r.name }}{% if r.metrics.market_cap_rank %} · #{{ r.metrics.market_cap_rank }}{% endif %}{% if r.news %} · <span title="{{ r.news[0].title }}">📰 {{ r.news|length }}</span>{% endif %}</span></div></div></td>
           <td><span class="badge {{ r.signal.level }}"><i>{{ r.signal.score }}</i>{{ r.signal.label }}</span>
             <span class="kind">{{ r.signal.kind_label }}</span></td>
           <td style="white-space:normal; min-width:120px">{% for t in r.trigger_labels %}<span class="chip {{ 'hot' if t == 'Trending' }}" style="margin:1px 0">{{ t }}</span> {% endfor %}</td>

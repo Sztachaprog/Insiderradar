@@ -75,6 +75,21 @@
   </div>
 
   <section class="card section">
+    <h2>Newsy: dlaczego to się rusza?</h2>
+    <p class="note">Nagłówki z ostatnich 3 dni o tym projekcie (Google News), odświeżane co kilka godzin przez dobę od wykrycia.</p>
+    {% if r.news %}
+      <ul class="reasons">
+        {% for n in r.news %}
+          <li class="info"><i>📰</i><span><a href="{{ n.url }}" target="_blank" rel="noopener">{{ n.title }}</a>
+            <span class="muted" style="font-size:12px"> · {{ n.source }}{% if n.ts %} · {{ n.ts|local("%d.%m %H:%M") }}{% endif %}</span></span></li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">Brak świeżych newsów o tym projekcie. Ruch bez newsa częściej bywa pompą albo grą na niskiej płynności.</p>
+    {% endif %}
+  </section>
+
+  <section class="card section">
     <h2>Kurs od wykrycia</h2>
     <div class="legend">
       <span style="--c: var(--blue)">Kurs {{ r.symbol }}</span>

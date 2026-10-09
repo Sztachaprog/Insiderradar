@@ -35,6 +35,9 @@ jobs:
       SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
       BLOCKSCOUT_API_KEY: ${{ secrets.BLOCKSCOUT_API_KEY }}   # optional: whales on Arbitrum + Optimism (free tier)
+      HELIUS_API_KEY: ${{ secrets.HELIUS_API_KEY }}           # optional: whales on Solana
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}   # optional: alerts
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       # Smaller per-run budgets: runs are frequent, so coverage builds up over the day.
       HISTORY_PER_RUN: "2"
       CRYPTO_DETAILS_PER_RUN: "5"
