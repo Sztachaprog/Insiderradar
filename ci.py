@@ -24,6 +24,7 @@ import app as webapp
 import crypto
 import form4_scanner as fs
 import market
+import safety
 import whales
 import xtb
 
@@ -85,9 +86,13 @@ def read_status() -> dict:
     """Scanner status saved by the previous step; a missing, empty or broken file is just 'no status'."""
     try:
         data = json.loads(STATUS.read_text())
-        return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
+    if not isinstance(data, dict):
+        return {}
+    # Statuses written before error scrubbing existed could contain URLs with keys.
+    return {k: {f: safety.scrub(v) if isinstance(v, str) else v for f, v in vals.items()}
+            for k, vals in data.items() if isinstance(vals, dict)}
 
 
 def _cache_methods(obj, names: list[str]) -> None:

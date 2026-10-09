@@ -28,6 +28,7 @@ import requests
 
 import crypto
 import signals
+import safety
 
 CHAINS = {
     "ethereum": {"id": 1, "label": "Ethereum", "explorer": "https://etherscan.io"},
@@ -65,7 +66,7 @@ BURN = {"0x0000000000000000000000000000000000000000", "0x00000000000000000000000
 # ---------- Chains & token keys ----------
 
 def api_key() -> str:
-    return os.environ.get("BLOCKSCOUT_API_KEY", "").strip()
+    return safety.extract_key(os.environ.get("BLOCKSCOUT_API_KEY", ""))
 
 
 def active_chains() -> list[str]:
@@ -557,12 +558,12 @@ class WhaleScanner:
                                     HOLDERS_PER_RUN if ethereum else EXTRA_HOLDERS,
                                     TRANSFERS_PER_RUN if ethereum else EXTRA_TRANSFERS)
                 except Exception as exc:  # one chain failing (rate limit, outage) must not stop the others
-                    errors.append(f"{chain}: {type(exc).__name__}: {exc}")
+                    errors.append(f"{chain}: {safety.safe_error(exc)}")
             self.last_new = len(set(self.store.whales()) - before)
             build(self.store, now)  # flags new accumulation signals at today's price
             self.last_error = "; ".join(errors) or None
         except Exception as exc:
-            self.last_error = f"{type(exc).__name__}: {exc}"
+            self.last_error = safety.safe_error(exc)
         finally:
             self.last_run = datetime.now().strftime("%H:%M:%S")
             self.running = False

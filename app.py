@@ -29,6 +29,7 @@ import form4_scanner as fs
 import history
 import market
 import signals
+import safety
 import strategy
 import whales
 import xtb
@@ -305,7 +306,7 @@ class Scanner:
             if self.after_scan:
                 self.after_scan()
         except Exception as exc:  # keep the loop alive; show the error in the UI
-            self.last_error = f"{type(exc).__name__}: {exc}"
+            self.last_error = safety.safe_error(exc)
         finally:
             self.last_run = datetime.now().strftime("%H:%M:%S")
             self.running = False

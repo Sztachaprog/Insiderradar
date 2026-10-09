@@ -22,6 +22,7 @@ import requests
 
 import calibration
 import signals
+import safety
 
 CG_URL = "https://api.coingecko.com/api/v3"
 PAGES = int(os.environ.get("CRYPTO_PAGES", "4"))                 # 250 coins per page
@@ -463,7 +464,7 @@ class CryptoScanner:
             self._run(self.client_factory(), now or utcnow())
             self.last_error = None
         except Exception as exc:
-            self.last_error = f"{type(exc).__name__}: {exc}"
+            self.last_error = safety.safe_error(exc)
         finally:
             self.last_run = datetime.now().strftime("%H:%M:%S")
             self.running = False
