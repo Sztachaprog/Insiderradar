@@ -132,6 +132,7 @@ def export(parts, base_path: str) -> int:
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_bytes(resp.data)
         (SITE / ".nojekyll").write_text("")
+        (SITE / "version.json").write_text(json.dumps({"build": flask_app.config["BUILD_ID"]}))
         log(f"eksport: {len(pages) - failed} stron do {SITE}/")
         return failed
     finally:

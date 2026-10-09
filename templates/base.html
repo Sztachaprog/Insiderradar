@@ -184,7 +184,7 @@
 
   {% if static %}
   <div class="card" style="padding:10px 14px; margin-bottom:16px; font-size:13px; color:var(--muted)">
-    Podgląd wygenerowany {{ generated_at }}. Dane odświeża GitHub Actions co ~10 min.
+    Podgląd wygenerowany {{ generated_at }} (<span id="age">przed chwilą</span>). Dane odświeża GitHub Actions co ~10 min, a strona przeładuje się sama, gdy pojawią się nowe.
     Filtry, edytor strategii i dodawanie portfeli działają w wersji lokalnej (instrukcja w README).
   </div>
   {% endif %}
@@ -202,6 +202,26 @@
       if (!s.running && !s.crypto_running && !s.whales_running) { clearInterval(poll); location.reload(); }
     } catch (e) { clearInterval(poll); }
   }, 2000);
+</script>
+{% endif %}
+{% if static %}
+<script>
+  // Static snapshot: show the data age and reload when GitHub Actions publishes a newer build.
+  (() => {
+    const build = {{ build_id|tojson }}, built = Date.parse(build);
+    const age = document.getElementById("age");
+    const tick = () => { if (age) { const m = Math.round((Date.now() - built) / 60000);
+      age.textContent = m < 1 ? "przed chwilą" : m < 60 ? `${m} min temu` : `${Math.floor(m / 60)} h ${m % 60} min temu`; } };
+    const check = async () => {
+      if (document.hidden) return;
+      try {
+        const r = await fetch("{{ request.script_root }}/version.json?t=" + Date.now(), { cache: "no-store" });
+        if (r.ok && (await r.json()).build !== build) location.reload();
+      } catch (e) { /* offline: try again next minute */ }
+    };
+    tick(); setInterval(tick, 30000); setInterval(check, 60000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) { tick(); check(); } });
+  })();
 </script>
 {% endif %}
 {% block scripts %}{% endblock %}

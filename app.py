@@ -539,6 +539,7 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
     SCAN_DISABLED=1 browses a downloaded database locally without scanning."""
     start_background = start_background and os.environ.get("SCAN_DISABLED") != "1"
     app = Flask(__name__)
+    app.config["BUILD_ID"] = crypto.iso(crypto.utcnow())  # static export: pages poll version.json for a newer one
     store = store or Store(DB_PATH)
     cstore = crypto_store or crypto.CryptoStore(store.path)
     if scanner is None:
@@ -568,7 +569,7 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
     def common(**extra):
         return {"scanner": scanner, "tracker": tracker, "crypto_scanner": crypto_scanner,
                 "interval": SCAN_INTERVAL_MIN, "crypto_interval": CRYPTO_INTERVAL_MIN,
-                "whale_scanner": whale_scanner, "whale_interval": WHALE_INTERVAL_MIN, "static": static,
+                "whale_scanner": whale_scanner, "whale_interval": WHALE_INTERVAL_MIN, "static": static, "build_id": app.config["BUILD_ID"],
                 "generated_at": datetime.now(crypto.LOCAL_TZ).strftime("%d.%m.%Y %H:%M %Z"),
                 "args": request.args, **extra}
 
