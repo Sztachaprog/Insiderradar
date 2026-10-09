@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}Strategie · Insider Radar{% endblock %}
+{% block head %}
+<style>
+  .editor { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; align-items: end; }
+  .checks { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+  .rules { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+  tr.sel td { background: var(--blue-soft); }
+  td .name { font-weight: 600; }
+  .pill-ok { background: var(--blue-soft); color: var(--blue); }
+</style>
+{% endblock %}
+{% block content %}
+  <p class="muted" style="margin:0 0 14px; max-width: 980px">Każdy wykryty ruch krypto jest symulowany jak transakcja dzienna.
+    Kupno następuje po cenie z chwili wykrycia. Sprzedaż następuje, gdy kurs dotknie take-profit lub stop-loss albo minie maksymalny czas trzymania. Od wyniku odejmowany jest koszt transakcji.
+    Strategie testują się na wszystkich zebranych danych, także tych sprzed ich zapisania.
+    Ceny są sprawdzane co skan (~15 min), więc krótkie szpilki między pomiarami są niewidoczne. TP liczę po cenie zlecenia, a SL po faktycznej cenie, czyli ostrożnie.</p>
+
+  <form class="filters card" method="get" style="grid-template-columns: repeat(auto-fit, minmax(160px, 220px))">
+    <input type="hidden" name="s" value="{{ selected.key }}">
+    <label>Koszt transakcji (kupno + sprzedaż) %
+      <input type="text" name="fee" value="{{ '%g'|format(fee * 100) }}" inputmode="decimal"></label>
+    <label>Stawka na transakcję $
+      <input type="text" name="stake" value="{{ '%g'|format(stake) }}" inputmode="numeric"></label>
+    <button class="primary">Przelicz</button>
+  </form>
+
+  <section class="card table-wrap" style="margin-bottom:16px">
+    <table>
+      <thead><tr><th>Strategia</th><th class="num">Transakcje</th><th class="num">Otwarte</th><th class="num">Trafność</th>
+        <th class="num">Śr. wynik netto</th><th class="num">Profit factor</th><th class="num">Wynik $</th><th class="num">Max obsunięcie $</th><th class="num">TP / SL</th></tr></thead>
+      <tbody>
+      {% for s in catalog %}{% set r = s.result %}
+        <tr class="{{ 'sel' if s.key == selected.key }}" onclick="location.href='{{ url_for('crypto_strategies', s=s.key, fee=fee * 100, stake=stake, **({'custom': 1} if s.key == 'custom' else {})) }}'">
+          <td style="white-space:normal; min-width:260px"><span class="name">{{ s.name }}</span>{% if s.saved %} <span class="chip pill-ok">zapisana</span>{% endif %}
+            <div class="rules">{% for rule in s.rules %}<span class="chip">{{ rule }}</span>{% endfor %}</div></td>
+          <td class="num">{{ r.closed }}{% if r.no_data %}<span class="sub" title="brak cen w chwili wyjścia">+{{ r.no_data }} bez danych</span>{% endif %}</td>
+          <td class="num">{{ r.open }}</td>
+          <td class="num">{{ r.win_rate|pct(false) }}</td>
+          <td class="num {{ ('up' if r.avg >= 0 else 'down') if r.avg is not none }}">{{ r.avg|pct }}</td>
+          <td class="num">{{ "%.2f"|format(r.profit_factor) if r.profit_factor is not none else "—" }}</td>
+          <td class="num"><b class="{{ 'up' if r.pnl >= 0 else 'down' }}">{{ "%+.2f"|format(r.pnl) }}</b>
+            {% if r.open %}<span class="sub">otwarte {{ "%+.2f"|format(r.open_pnl) }}</span>{% endif %}</td>
+          <td class="num down">{{ "%.2f"|format(r.max_dd) }}</td>
+          <td class="num">{{ r.tp_hits }} / {{ r.sl_hits }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  {% set r = selected.result %}
+  <div class="grid2">
+    <section class="card section">
+      <h2>{{ selected.name }}: krzywa kapitału</h2>
+      <p class="note">{{ selected.desc }} Zysk narastająco w $ przy stawce {{ '%g'|format(stake) }} $ na transakcję, w kolejności zamknięcia transakcji.</p>
+      {% if r.curve %}
+        <div class="legend"><span style="--c: var(--blue)">{{ selected.name }}</span>{% if selected.key != 'all' %}<span class="dash" style="--c: var(--pink)">Wszystko (punkt odniesienia)</span>{% endif %}</div>
+        <div class="chart-box"><canvas id="equity"></canvas></div>
+      {% else %}<p class="muted">Jeszcze żadna transakcja się nie zamknęła. Przy limicie {{ selected.full.hold_h }} h pierwsze wyniki będą po tym czasie od wykrycia.</p>{% endif %}
+    </section>
+    <section class="card section">
+      <h2>Okazje teraz</h2>
+      <p class="note">Ruchy z ostatniej godziny pasujące do tej strategii, które jeszcze nie osiągnęły TP ani SL. Kandydaci do wejścia.</p>
+      {% if candidates %}
+        <table>
+          <thead><tr><th>Token</th><th>Wykryto</th><th class="num">Cena wejścia</th><th class="num">Teraz</th><th class="num">TP / SL</th></tr></thead>
+          <tbody>
+          {% for t in candidates %}{% set row = t.row %}
+            <tr onclick="location.href='{{ url_for('crypto_event', event_id=row.id) }}'">
+              <td><b class="mono">{{ row.symbol }}</b><span class="sub">{{ row.trigger_labels|join(', ') }} · ocena {{ row.signal.score }}</span></td>
+              <td class="mono">{{ row.detected_at|local("%H:%M") }}</td>
+              <td class="num">{{ t.entry|usd }}</td>
+              <td class="num {{ ('up' if t.gross >= 0 else 'down') if t.gross is not none }}">{{ t.gross|pct }}</td>
+              <td class="num">{{ (t.entry * (1 + (selected.full.tp)))|usd }}<span class="sub">{{ (t.entry * (1 - (selected.full.sl)))|usd }}</span></td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      {% else %}<p class="muted">Teraz nic nie pasuje. Nowe ruchy pojawiają się co skan.</p>{% endif %}
+    </section>
+  </div>
+
+  <section class="card section">
+    <h2>Edytor strategii</h2>
+    <p class="note">Edytor startuje od reguł wybranej strategii. Zmień je, kliknij <b>Podgląd</b>, żeby od razu zobaczyć wynik na zebranych danych, i <b>Zapisz</b>, żeby śledzić strategię przez kolejne dni.</p>
+    <form method="get" id="editor">
+      <input type="hidden" name="custom" value="1"><input type="hidden" name="s" value="custom">
+      <input type="hidden" name="fee" value="{{ '%g'|format(fee * 100) }}"><input type="hidden" name="stake" value="{{ '%g'|format(stake) }}">
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 14px">
+        <div><label style="margin-bottom:6px">Wejdź, gdy ruch to (puste = dowolny)</label>
+          <div class="checks">{% for key, label in trigger_labels.items() %}
+            <label class="check"><input type="checkbox" name="triggers" value="{{ key }}" {% if key in form.triggers %}checked{% endif %}> {{ label }}</label>{% endfor %}</div></div>
+        <div><label style="margin-bottom:6px">Pomiń, gdy ruch to</label>
+          <div class="checks">{% for key, label in trigger_labels.items() %}
+            <label class="check"><input type="checkbox" name="exclude" value="{{ key }}" {% if key in form.exclude %}checked{% endif %}> {{ label }}</label>{% endfor %}</div></div>
+      </div>
+      <div class="editor">
+        <label>Ocena min.<input type="text" name="min_score" value="{{ form.min_score }}"></label>
+        <label>Ocena maks.<input type="text" name="max_score" value="{{ form.max_score }}"></label>
+        <label>Kapitalizacja min. (mln $)<input type="text" name="min_mcap" value="{{ form.min_mcap }}" placeholder="bez limitu"></label>
+        <label>Kapitalizacja maks. (mln $)<input type="text" name="max_mcap" value="{{ form.max_mcap }}" placeholder="bez limitu"></label>
+        <label>Zmiana 24h min. %<input type="text" name="min_ch24" value="{{ form.min_ch24 }}" placeholder="np. -15"></label>
+        <label>Zmiana 24h maks. %<input type="text" name="max_ch24" value="{{ form.max_ch24 }}" placeholder="np. 15"></label>
+        <label>Wolumen / kap. min.<input type="text" name="min_vol" value="{{ form.min_vol }}" placeholder="np. 0.6"></label>
+        <label>Wolumen / kap. maks.<input type="text" name="max_vol" value="{{ form.max_vol }}" placeholder="np. 2"></label>
+        <label>Take-profit %<input type="text" name="tp" value="{{ form.tp }}"></label>
+        <label>Stop-loss %<input type="text" name="sl" value="{{ form.sl }}"></label>
+        <label>Maks. czas trzymania (h)<input type="text" name="hold_h" value="{{ form.hold_h }}"></label>
+        <button class="ghost">Podgląd</button>
+      </div>
+    </form>
+    <div style="display:flex; gap:8px; margin-top:14px; flex-wrap:wrap; align-items:end">
+      <form method="post" action="{{ url_for('crypto_strategy_save') }}" id="save" style="display:flex; gap:8px; align-items:end">
+        <label>Nazwa<input type="text" name="name" placeholder="np. Akumulacja v2" style="min-width:220px"></label>
+        <button class="primary">Zapisz strategię</button>
+      </form>
+      {% if selected.saved %}
+      <form method="post" action="{{ url_for('crypto_strategy_delete', strategy_id=selected.id) }}" onsubmit="return confirm('Usunąć strategię {{ selected.name }}?')">
+        <button class="ghost">Usuń „{{ selected.name }}”</button>
+      </form>{% endif %}
+    </div>
+  </section>
+
+  <section class="card table-wrap">
+    {% if r.trades %}
+    <table>
+      <thead><tr><th>Token</th><th>Wejście</th><th class="num">Cena</th><th>Wyjście</th><th class="num">Powód</th>
+        <th class="num">Najwyżej</th><th class="num">Najniżej</th><th class="num">Wynik netto</th></tr></thead>
+      <tbody>
+      {% for t in r.trades %}{% set row = t.row %}
+        <tr onclick="location.href='{{ url_for('crypto_event', event_id=row.id) }}'">
+          <td><b class="mono">{{ row.symbol }}</b><span class="sub">{{ row.trigger_labels|join(', ') }} · ocena {{ row.signal.score }}</span></td>
+          <td class="mono">{{ t.entry_at|local("%d.%m %H:%M") }}</td>
+          <td class="num">{{ t.entry|usd }}</td>
+          <td class="mono">{{ t.exit_at|local("%d.%m %H:%M") if t.exit_at else '—' }}</td>
+          <td class="num">{% if t.status == 'closed' %}{{ t.reason }}{% elif t.status == 'open' %}<span class="chip">otwarta</span>{% else %}<span class="chip">brak danych</span>{% endif %}</td>
+          <td class="num up">{{ t.peak|pct }}</td>
+          <td class="num down">{{ t.trough|pct }}</td>
+          <td class="num"><b class="{{ ('up' if t.net >= 0 else 'down') if t.net is not none }}">{{ t.net|pct }}</b></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<div class="empty">Żaden ruch nie pasuje do tej strategii.</div>{% endif %}
+  </section>
+{% endblock %}
+{% block scripts %}
+<script>
+  // "Save" uses the rules currently in the editor.
+  document.getElementById("save").addEventListener("submit", e => {
+    const form = e.target;
+    for (const el of document.querySelectorAll("#editor input")) {
+      if (["custom", "s", "fee", "stake"].includes(el.name) || (el.type === "checkbox" && !el.checked)) continue;
+      const h = document.createElement("input"); h.type = "hidden"; h.name = el.name; h.value = el.value; form.appendChild(h);
+    }
+  });
+</script>
+{% set r = selected.result %}{% if r.curve %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const fmt = ts => new Date(ts).toLocaleString("pl-PL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const sel = {{ r.curve|tojson }};
+  const base = {{ (catalog[0].result.curve if selected.key != 'all' else [])|tojson }};
+  const ds = [{ label: {{ selected.name|tojson }}, data: sel.map(p => ({ x: Date.parse(p[0]), y: p[1] })), borderColor: css("--blue"),
+                borderWidth: 2, stepped: true, pointRadius: 0, pointHoverRadius: 5 }];
+  if (base.length) ds.push({ label: "Wszystko", data: base.map(p => ({ x: Date.parse(p[0]), y: p[1] })), borderColor: css("--pink"),
+                             borderWidth: 2, borderDash: [6, 4], stepped: true, pointRadius: 0, pointHoverRadius: 5 });
+  new Chart(document.getElementById("equity"), {
+    type: "line", data: { datasets: ds },
+    options: { maintainAspectRatio: false, interaction: { mode: "nearest", intersect: false },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { title: i => fmt(i[0].parsed.x), label: c => ` ${c.dataset.label}: ${c.parsed.y >= 0 ? "+" : ""}${c.parsed.y.toFixed(2)} $` } } },
+      scales: { x: { type: "linear", grid: { display: false }, ticks: { color: css("--muted"), maxTicksLimit: 6, callback: v => fmt(v) } },
+                y: { grid: { color: css("--line") }, border: { display: false }, ticks: { color: css("--muted"), callback: v => v + " $" } } } },
+  });
+</script>
+{% endif %}
+{% endblock %}

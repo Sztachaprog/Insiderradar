@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block content %}
+  <form class="filters card" method="get">
+    <label>Typ
+      <select name="code">
+        <option value="P" {% if args.get('code', 'P') == 'P' %}selected{% endif %}>Zakupy (P)</option>
+        <option value="S" {% if args.get('code') == 'S' %}selected{% endif %}>Sprzedaże (S)</option>
+      </select>
+    </label>
+    <label>Min. kwota $
+      <input type="text" name="min" value="{{ args.get('min', '100000') }}" inputmode="numeric">
+    </label>
+    <label>Maks. kwota $
+      <input type="text" name="max" value="{{ args.get('max', '') }}" placeholder="bez limitu" inputmode="numeric">
+    </label>
+    <label>Sygnał
+      <select name="signal">
+        <option value="">wszystkie</option>
+        <option value="medium" {% if args.get('signal') == 'medium' %}selected{% endif %}>umiarkowany i silny</option>
+        <option value="strong" {% if args.get('signal') == 'strong' %}selected{% endif %}>tylko silny</option>
+      </select>
+    </label>
+    <label>Rodzaj
+      <select name="kind">
+        <option value="">wszystkie</option>
+        <option value="insider" {% if args.get('kind') == 'insider' %}selected{% endif %}>insider na rynku</option>
+        <option value="fund" {% if args.get('kind') == 'fund' %}selected{% endif %}>fundusz / podmiot</option>
+        <option value="placement" {% if args.get('kind') == 'placement' %}selected{% endif %}>emisja / umowa</option>
+      </select>
+    </label>
+    <label>Szukaj
+      <input type="text" name="q" value="{{ args.get('q', '') }}" placeholder="ticker, spółka, osoba">
+    </label>
+    <label class="check"><input type="checkbox" name="all_owners" value="1" {% if args.get('all_owners') == '1' %}checked{% endif %}> 10% udziałowcy też</label>
+    <label class="check"><input type="checkbox" name="plan" value="1" {% if args.get('plan') == '1' %}checked{% endif %}> Plany 10b5-1 też</label>
+    <input type="hidden" name="sort" value="{{ args.get('sort', 'value') }}">
+    <button class="primary">Filtruj</button>
+  </form>
+
+  <section class="stats">
+    <div class="stat card"><b>{{ summary.count }}</b><small>transakcji · {{ stored }} zgłoszeń w bazie</small></div>
+    <div class="stat card"><b>{{ summary.total|money }}</b><small>łączna wartość</small></div>
+    <div class="stat card"><b>{{ summary.tickers }}</b><small>spółek</small></div>
+    <div class="stat card"><b>{{ summary.clusters|length }}</b>
+      <small>klastry{% if summary.clusters %}: {{ summary.clusters|join(", ") }}{% else %} (2+ insiderów){% endif %}</small></div>
+    <div class="stat card"><b>{{ summary.tracked }}</b><small>śledzonych cen · <a href="{{ url_for('results', **args.to_dict()) }}">wyniki →</a></small></div>
+  </section>
+
+  {% set sort = args.get('sort', 'value') %}
+  {% macro sort_link(key, label) -%}
+    {% set a = args.to_dict() %}{% set _ = a.update({'sort': key}) %}
+    <a href="{{ url_for('index', **a) }}" class="{{ 'on' if sort == key }}">{{ label }}{{ ' ↓' if sort == key }}</a>
+  {%- endmacro %}
+
+  <div class="table-wrap card">
+  {% if rows %}
+    <table>
+      <thead><tr>
+        <th>{{ sort_link('date', 'Data') }}</th><th>Spółka</th>
+        <th>{{ sort_link('signal', 'Sygnał') }}</th>
+        <th class="num">{{ sort_link('value', 'Wartość') }}</th>
+        <th class="num hide-sm">Śr. cena</th>
+        <th>Kto</th>
+        <th class="num">{{ sort_link('perf', 'Od dodania') }}</th>
+        <th class="hide-sm"></th>
+        <th class="hide-sm">{{ sort_link('cluster', 'Klaster') }}</th>
+      </tr></thead>
+      <tbody>
+      {% for r in rows %}
+        {% set link = url_for('filing', accession=r.accession) %}
+        <tr onclick="location.href='{{ link }}'">
+          <td class="mono">{{ r.date }}</td>
+          <td class="ticker"><a href="{{ link }}" style="color:inherit;text-decoration:none"><b>{{ r.ticker }}</b></a>
+            <small title="{{ r.issuer }}">{{ r.issuer }}</small>
+            {% if r.sector %}<small>{{ r.sector }}{% if r.market_cap %} · {{ r.market_cap|money }}{% endif %}</small>{% endif %}</td>
+          <td>{% if r.signal.score is not none %}<span class="badge {{ r.signal.level }}"><i>{{ r.signal.score }}</i>{{ r.signal.label }}</span>{% else %}<span class="muted">—</span>{% endif %}
+            <span class="kind">{{ r.signal.kind_label }}</span></td>
+          <td class="num">{{ r.value|money }}
+            {% if r.pct_mcap %}<span class="sub">{{ "%.2f"|format(r.pct_mcap * 100) }}% kap.</span>{% endif %}</td>
+          <td class="num hide-sm">${{ "{:,.2f}".format(r.avg_price) }}</td>
+          <td>{{ r.owner }}<br><span class="chip">{{ r.role }}</span>{% if r.plan %} <span class="chip">10b5-1</span>{% endif %}</td>
+          <td class="num">
+            {% if r.perf and r.perf.now is not none %}
+              <b class="{{ 'up' if r.perf.now >= 0 else 'down' }}">{{ '▲' if r.perf.now >= 0 else '▼' }} {{ r.perf.now|pct }}</b>
+              <span class="sub">${{ "{:,.2f}".format(r.base_price) }} → ${{ "{:,.2f}".format(r.price_now) }}</span>
+            {% else %}<span class="muted">czeka na cenę</span>{% endif %}
+          </td>
+          <td class="hide-sm">{% if r.spark %}
+            <svg class="spark" width="{{ r.spark.w }}" height="{{ r.spark.h }}" viewBox="0 0 {{ r.spark.w }} {{ r.spark.h }}" aria-hidden="true">
+              <line x1="0" x2="{{ r.spark.w }}" y1="{{ r.spark.zero }}" y2="{{ r.spark.zero }}" stroke="var(--line)" stroke-dasharray="2 2"/>
+              <polyline points="{{ r.spark.points }}" fill="none" stroke="var(--{{ 'up' if r.spark.up else 'down' }})" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+            </svg>{% endif %}</td>
+          <td class="hide-sm">{% if r.cluster > 1 %}<span class="chip hot">{{ r.cluster }} insiderów</span>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">
+      {% if stored %}Brak transakcji spełniających filtry.{% else %}Baza jest pusta. Pierwszy skan trwa około pół minuty.{% endif %}
+    </div>
+  {% endif %}
+  </div>
+{% endblock %}
+{% block scripts %}
+{% if not scanner.running and not stored and not scanner.last_run %}
+<script>
+  const poll = setInterval(async () => {
+    try {
+      const s = await (await fetch("{{ url_for('api_status') }}")).json();
+      if (s.last_run) { clearInterval(poll); location.reload(); }
+    } catch (e) { clearInterval(poll); }
+  }, 2000);
+</script>
+{% endif %}
+{% endblock %}

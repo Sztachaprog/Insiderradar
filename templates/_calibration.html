@@ -1,0 +1,80 @@
+{# Calibration block. Needs: cal, scope ("stocks"|"crypto"), endpoint, horizon_opts [(key, label)], horizon #}
+<section class="card section" id="kalibracja">
+  <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap">
+    <div>
+      <h2 style="margin-bottom:4px">Kalibracja oceny</h2>
+      <p class="note" style="margin:0">Czy wyższa ocena faktycznie daje wyższy wynik? Mierzone {{ cal.horizon_label }} na {{ cal.n }} transakcjach.</p>
+    </div>
+    <div class="seg">
+      {% for key, label in horizon_opts %}
+        {% set a = args.to_dict() %}{% set _ = a.update({'h': key}) %}
+        <a href="{{ url_for(endpoint, **a) }}#kalibracja" class="{{ 'on' if horizon == key }}">{{ label }}</a>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="stats" style="margin:16px 0">
+    <div class="stat card"><b>{{ "%.2f"|format(cal.spearman) if cal.spearman is not none else "—" }}</b>
+      <small>korelacja ocena ↔ wynik (od −1 do 1)</small></div>
+    <div class="stat card" style="grid-column: span 3"><b style="font: 600 15px Inter, sans-serif">{{ cal.verdict }}</b>
+      <small>Powyżej 0,3 ocena dobrze przewiduje wynik, około 0 nic nie przewiduje.</small></div>
+  </div>
+
+  <div class="grid2">
+    <div>
+      <h2 style="font-size:14px">Wynik według przedziału oceny</h2>
+      <table>
+        <thead><tr><th>Ocena</th><th class="num">Próba</th><th class="num">Średnio</th><th class="num">Trafność</th></tr></thead>
+        <tbody>
+        {% for b in cal.buckets %}
+          <tr style="cursor:default"><td class="mono">{{ b.label }}</td><td class="num">{{ b.n }}</td>
+            <td class="num {{ ('up' if b.avg >= 0 else 'down') if b.avg is not none }}">{{ b.avg|pct }}</td>
+            <td class="num">{{ b.win_rate|pct(false) }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div>
+      <h2 style="font-size:14px">Co robić z wagami</h2>
+      <p class="muted" style="margin:0 0 10px">Każdy czynnik oceny porównuję z wynikiem: średnia transakcji z tym czynnikiem kontra bez niego.
+        Propozycja przesuwa wagę w stronę tego, co faktycznie działało, ostrożniej przy małej próbie.
+        Zastosować da się ją od 30 śledzonych transakcji i dopiero na horyzoncie {{ cal.min_horizon_label }} lub dłuższym.
+        Krótsze horyzonty to głównie szum.</p>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <form method="post" action="{{ url_for('calibrate', scope=scope, action='apply') }}">
+          {% for k, v in args.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+          {% if 'h' not in args %}<input type="hidden" name="h" value="{{ horizon }}">{% endif %}
+          <button class="primary" {% if not cal.can_apply or not cal.changes %}disabled style="opacity:.45; cursor:not-allowed"{% endif %}>
+            Zastosuj propozycję ({{ cal.changes|length }} zmian)</button>
+        </form>
+        <form method="post" action="{{ url_for('calibrate', scope=scope, action='reset') }}">
+          {% for k, v in args.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+          <button class="ghost">Przywróć domyślne wagi</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="table-wrap" style="margin-top:16px">
+    <table>
+      <thead><tr><th>Czynnik</th><th class="num">Próba</th><th class="num">Z czynnikiem</th><th class="num">Bez</th>
+        <th class="num">Różnica</th><th>Werdykt</th><th class="num">Waga</th><th class="num">Propozycja</th></tr></thead>
+      <tbody>
+      {% for f in cal.factors %}
+        <tr style="cursor:default">
+          <td>{{ f.label }}{% if f.weight != f.default %} <span class="chip" title="domyślnie {{ f.default }}">zmieniona</span>{% endif %}</td>
+          <td class="num">{{ f.n }}</td>
+          <td class="num">{{ f.avg_with|pct }}</td>
+          <td class="num">{{ f.avg_without|pct }}</td>
+          <td class="num {{ ('up' if f.diff >= 0 else 'down') if f.diff is not none }}">{{ f.diff|pct }}</td>
+          <td>{% if f.verdict == 'pomaga' %}<span class="chip" style="background:var(--blue-soft);color:var(--blue)">▲ pomaga</span>
+              {% elif f.verdict == 'szkodzi' %}<span class="chip hot">▼ szkodzi</span>
+              {% else %}<span class="chip">{{ f.verdict }}</span>{% endif %}</td>
+          <td class="num">{{ "%+d"|format(f.weight) }}</td>
+          <td class="num">{% if f.suggested != f.weight %}<b>{{ "%+d"|format(f.suggested) }}</b>{% else %}<span class="muted">—</span>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>

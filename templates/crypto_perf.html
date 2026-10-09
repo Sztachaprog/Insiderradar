@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Krypto wyniki · Insider Radar{% endblock %}
+{% block content %}
+  {% set now = perf.stats[0] %}{% set d = perf.direction %}
+  <p class="muted" style="margin:0 0 14px">Wynik liczony od ceny z chwili wykrycia ruchu, dla filtrów z zakładki Krypto
+    ({{ summary.count }} ruchów, z czego {{ perf.rows|length }} ma już ceny). Punktem odniesienia jest BTC.</p>
+
+  <section class="stats">
+    <div class="stat card"><b class="{{ 'up' if (now.avg or 0) >= 0 else 'down' }}">{{ now.avg|pct }}</b><small>średni wynik od wykrycia</small></div>
+    <div class="stat card"><b>{{ now.win_rate|pct(false) }}</b><small>wzrosło (wynik &gt; 0)</small></div>
+    <div class="stat card"><b class="up">{{ now.avg_win|pct }}</b><small>średni zysk rosnących</small></div>
+    <div class="stat card"><b class="down">{{ now.avg_loss|pct }}</b><small>średnia strata spadających</small></div>
+    <div class="stat card"><b>{{ d.hit|pct(false) }}</b><small>trafność kierunku ({{ d.n }}): ocena ≥ 50 to wzrost, poniżej to spadek</small></div>
+  </section>
+
+  {% if perf.rows %}
+  <div class="grid2">
+    <section class="card section">
+      <h2>Średnia ścieżka po wykryciu</h2>
+      <p class="note">Średni skumulowany wynik co 6 godzin od wykrycia, do 7 dni.</p>
+      <div class="chart-box"><canvas id="path"></canvas></div>
+    </section>
+    <section class="card section">
+      <h2>Ocena a wynik</h2>
+      <p class="note">Każdy punkt to jeden ruch: oś X to ocena w chwili wykrycia, oś Y to wynik od wykrycia. Punkty układające się w górę w prawo oznaczają, że ocena działa.</p>
+      <div class="chart-box"><canvas id="scatter"></canvas></div>
+    </section>
+  </div>
+  {% endif %}
+
+  <section class="card section">
+    <h2>Wyniki według horyzontu</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Horyzont</th><th class="num">Próba</th><th class="num">Średnio</th><th class="num">Mediana</th>
+          <th class="num">Wzrosło</th><th class="num">Śr. zysk</th><th class="num">Śr. strata</th><th class="num">vs BTC</th></tr></thead>
+        <tbody>
+        {% for s in perf.stats %}
+          <tr style="cursor:default">
+            <td>{{ s.label }}</td><td class="num">{{ s.n }}</td>
+            <td class="num {{ ('up' if s.avg >= 0 else 'down') if s.avg is not none }}">{{ s.avg|pct }}</td>
+            <td class="num">{{ s.median|pct }}</td><td class="num">{{ s.win_rate|pct(false) }}</td>
+            <td class="num up">{{ s.avg_win|pct }}</td><td class="num down">{{ s.avg_loss|pct }}</td>
+            <td class="num {{ ('up' if s.alpha >= 0 else 'down') if s.alpha is not none }}">{{ s.alpha|pct }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {% set cal = perf.calibration %}{% set endpoint = 'crypto_results' %}{% set horizon = perf.horizon %}
+  {% set horizon_opts = [('now', 'Od wykrycia'), ('1', '1 h'), ('24', '24 h'), ('72', '3 dni'), ('168', '7 dni')] %}
+  {% include "_calibration.html" %}
+
+  <section class="card table-wrap">
+    {% if perf.rows %}
+    <table>
+      <thead><tr><th>Token</th><th>Potencjał</th><th>Wykryto</th><th class="num">Cena</th><th class="num">Teraz</th>
+        <th class="num">Od wykrycia</th>{% for n, label in perf.horizons %}<th class="num">{{ label }}</th>{% endfor %}<th class="num">vs BTC</th></tr></thead>
+      <tbody>
+      {% for r in perf.rows %}
+        <tr onclick="location.href='{{ url_for('crypto_event', event_id=r.id) }}'">
+          <td><b class="mono">{{ r.symbol }}</b><span class="sub">{{ r.trigger_labels|join(', ') }}</span></td>
+          <td><span class="badge {{ r.signal.level }}"><i>{{ r.signal.score }}</i>{{ r.signal.label }}</span></td>
+          <td class="mono">{{ r.detected_at|local("%d.%m %H:%M") }}</td>
+          <td class="num">{{ r.base_price|usd }}</td><td class="num">{{ r.price_now|usd }}</td>
+          <td class="num"><b class="{{ 'up' if r.perf.now >= 0 else 'down' }}">{{ '▲' if r.perf.now >= 0 else '▼' }} {{ r.perf.now|pct }}</b></td>
+          {% for n, label in perf.horizons %}{% set h = r.perf.h.get(n) %}
+            <td class="num {{ ('up' if h.ret >= 0 else 'down') if h }}">{{ h.ret|pct if h else '—' }}</td>{% endfor %}
+          <td class="num {{ ('up' if r.perf.alpha_now >= 0 else 'down') if r.perf.alpha_now is not none }}">{{ r.perf.alpha_now|pct }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <div class="empty">Nic jeszcze nie jest śledzone. Ruchy pojawią się po pierwszym skanie CoinGecko.</div>
+    {% endif %}
+  </section>
+{% endblock %}
+{% block scripts %}
+{% if perf.rows %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const pct = v => (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "%";
+  const axis = { grid: { color: css("--line") }, border: { display: false }, ticks: { color: css("--muted"), callback: v => pct(v) } };
+  const path = {{ perf.path|tojson }};
+  new Chart(document.getElementById("path"), {
+    type: "line",
+    data: { labels: path.map(p => p[0] === 0 ? "wykryto" : `+${p[0]}h`),
+      datasets: [{ label: "Średni wynik", data: path.map(p => p[1]), borderColor: css("--blue"), borderWidth: 2,
+                   tension: .25, pointRadius: 0, pointHoverRadius: 5, spanGaps: true }] },
+    options: { maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => ` Średnio: ${pct(c.parsed.y)}` } } },
+      scales: { x: { grid: { display: false }, ticks: { color: css("--muted"), maxTicksLimit: 8 } }, y: axis } },
+  });
+  const pts = {{ perf.rows|map(attribute='signal')|map(attribute='score')|list|tojson }}
+    .map((s, i) => ({ x: s, y: {{ perf.rows|map(attribute='perf')|map(attribute='now')|list|tojson }}[i],
+                      sym: {{ perf.rows|map(attribute='symbol')|list|tojson }}[i] }));
+  new Chart(document.getElementById("scatter"), {
+    type: "scatter",
+    data: { datasets: [{ data: pts, pointRadius: 5, pointHoverRadius: 7, borderColor: css("--panel"), borderWidth: 2,
+      backgroundColor: pts.map(p => p.y >= 0 ? css("--blue") : css("--pink")) }] },
+    options: { maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => ` ${c.raw.sym}: ocena ${c.raw.x}, ${pct(c.raw.y)}` } } },
+      scales: { x: { min: 0, max: 100, grid: { color: css("--line") }, ticks: { color: css("--muted") }, title: { display: true, text: "ocena", color: css("--muted") } }, y: axis } },
+  });
+</script>
+{% endif %}
+{% endblock %}

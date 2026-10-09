@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}{{ r.symbol }} · Insider Radar{% endblock %}
+{% block head %}
+<style>
+  .hero { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; margin-bottom: 16px; }
+  @media (max-width: 900px) { .hero { grid-template-columns: 1fr; } }
+  .title-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .title-row img { width: 40px; height: 40px; border-radius: 50%; }
+  .title-row h1 { font: 700 30px "Space Grotesk", sans-serif; margin: 0; letter-spacing: -.02em; }
+  .summary { color: var(--muted); margin: 14px 0 0; max-height: 11em; overflow: auto; white-space: pre-line; }
+  .big { font: 700 40px "Space Grotesk", sans-serif; background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; line-height: 1; }
+  .meter { height: 8px; border-radius: 99px; background: var(--panel-2); overflow: hidden; margin-top: 6px; width: 180px; }
+  .meter span { display: block; height: 100%; background: var(--grad); }
+  .returns { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-top: 14px; }
+  .returns div { background: var(--panel-2); border-radius: 10px; padding: 10px 12px; }
+  .returns small { display: block; color: var(--muted); font-size: 11.5px; }
+  .returns b { font: 600 16px "JetBrains Mono", monospace; }
+  .links { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+</style>
+{% endblock %}
+{% block content %}
+  {% set d = r.details %}{% set m = r.metrics %}
+  <p style="margin:0 0 12px"><a href="{{ url_for('crypto_index') }}">← wróć do radaru</a></p>
+  <div class="hero">
+    <section class="card section">
+      <div class="title-row">
+        {% if r.image %}<img src="{{ r.image }}" alt="">{% endif %}
+        <h1>{{ r.symbol }}</h1><span class="muted">{{ r.name }}</span>
+        {% if m.market_cap_rank %}<span class="chip">#{{ m.market_cap_rank }}</span>{% endif %}
+      </div>
+      <div class="links">
+        {% for c in (d.categories or [])[:6] %}<span class="chip">{{ c }}</span>{% endfor %}
+      </div>
+      <div class="links">
+        {% if d.homepage %}<a href="{{ d.homepage }}" target="_blank" rel="noopener">strona ↗</a>{% endif %}
+        {% if d.twitter %}<a href="https://x.com/{{ d.twitter }}" target="_blank" rel="noopener">X @{{ d.twitter }} ↗</a>{% endif %}
+        {% for g in d.github or [] %}<a href="{{ g }}" target="_blank" rel="noopener">GitHub ↗</a>{% endfor %}
+        <a href="https://www.coingecko.com/en/coins/{{ r.coin_id }}" target="_blank" rel="noopener">CoinGecko ↗</a>
+      </div>
+      <div class="facts">
+        <div><small>Kapitalizacja</small><b>{{ m.market_cap|money }}</b></div>
+        <div><small>FDV</small><b>{{ m.fully_diluted_valuation|money }}</b></div>
+        <div><small>Wolumen 24h</small><b>{{ m.total_volume|money }}</b></div>
+        <div><small>Od ATH</small><b class="down">{{ ((m.ath_change_percentage or 0) / 100)|pct }}</b></div>
+        <div><small>Start projektu</small><b>{{ d.genesis_date or "—" }}</b></div>
+        <div><small>Obserwujących</small><b>{{ "{:,}".format(d.watchlist) if d.watchlist else "—" }}</b></div>
+      </div>
+      {% if d.description %}<p class="summary">{{ d.description }}</p>
+      {% else %}<p class="summary">Opis projektu pobierze się przy następnym skanie (limit darmowego API).</p>{% endif %}
+    </section>
+
+    <section class="card section">
+      <h2>Co się dzieje i jaki jest potencjał?</h2>
+      <div style="display:flex; align-items:center; gap:16px; margin-bottom:12px">
+        <div class="big">{{ r.signal.score }}</div>
+        <div><span class="badge {{ r.signal.level }}"><i>{{ r.signal.score }}/100</i>{{ r.signal.label }} potencjał</span>
+          <div class="meter"><span style="width: {{ r.signal.score }}%"></span></div></div>
+      </div>
+      <b>{{ r.signal.kind_label }}</b>
+      <p class="muted" style="margin:4px 0 0">{{ r.signal.kind_text }}</p>
+      <div class="facts" style="margin-top:12px">
+        <div><small>1h</small><b class="{{ 'up' if r.ch1h >= 0 else 'down' }}">{{ r.ch1h|pct }}</b></div>
+        <div><small>24h</small><b class="{{ 'up' if r.ch24 >= 0 else 'down' }}">{{ r.ch24|pct }}</b></div>
+        <div><small>7 dni</small><b class="{{ 'up' if r.ch7d >= 0 else 'down' }}">{{ r.ch7d|pct }}</b></div>
+      </div>
+      <ul class="reasons">
+        {% for sign, text in r.signal.reasons %}
+          <li class="{{ {'+': 'plus', '-': 'minus'}.get(sign, 'info') }}"><i>{{ {'+': '+', '-': '−'}.get(sign, '·') }}</i><span>{{ text }}</span></li>
+        {% endfor %}
+      </ul>
+      <p class="muted" style="font-size:12px; margin:12px 0 0">Ocena powyżej 50 oznacza, że czynniki wskazują raczej na dalszy wzrost niż spadek.
+        To, czy tak naprawdę jest, sprawdzisz w zakładce Krypto wyniki.</p>
+    </section>
+  </div>
+
+  <section class="card section">
+    <h2>Kurs od wykrycia</h2>
+    <div class="legend">
+      <span style="--c: var(--blue)">Kurs {{ r.symbol }}</span>
+      <span class="dash" style="--c: var(--pink)">Cena przy wykryciu ({{ r.detected_at|local }}): {{ r.base_price|usd }}</span>
+    </div>
+    {% if points|length > 1 %}<div class="chart-box"><canvas id="price"></canvas></div>
+    {% else %}<p class="muted">Za mało punktów na wykres. Ceny dopisują się co skan, a przerwy uzupełnia historia z CoinGecko.</p>{% endif %}
+    <div class="returns">
+      <div><small>Od wykrycia</small><b class="{{ 'up' if (r.perf.now or 0) >= 0 else 'down' }}">{{ r.perf.now|pct }}</b></div>
+      <div><small>vs BTC</small><b class="{{ 'up' if (r.perf.alpha_now or 0) >= 0 else 'down' }}">{{ r.perf.alpha_now|pct }}</b></div>
+      {% for n, label in horizons %}{% set h = r.perf.h.get(n) %}
+        <div><small>Po {{ label }}</small>{% if h %}<b class="{{ 'up' if h.ret >= 0 else 'down' }}">{{ h.ret|pct }}</b>
+          {% elif n in r.perf.missing %}<b class="muted">brak danych</b>{% else %}<b class="muted">czekamy</b>{% endif %}</div>
+      {% endfor %}
+    </div>
+  </section>
+
+  {% if others %}
+  <section class="card section">
+    <h2>Wcześniejsze ruchy tego tokena</h2>
+    <table>
+      <thead><tr><th>Wykryto</th><th>Ruch</th><th class="num">Ocena</th><th class="num">Od wykrycia</th></tr></thead>
+      <tbody>
+      {% for o in others %}
+        <tr onclick="location.href='{{ url_for('crypto_event', event_id=o.id) }}'"><td class="mono" title="{{ o.detected_at|local }}">{{ o.detected_at|ago }}</td>
+          <td>{{ o.trigger_labels|join(', ') }}</td><td class="num">{{ o.signal.score }}</td>
+          <td class="num {{ ('up' if o.perf.now >= 0 else 'down') if o.perf.now is not none }}">{{ o.perf.now|pct }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+{% endblock %}
+{% block scripts %}
+{% if points|length > 1 %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const pts = {{ points|tojson }}, base = {{ r.base_price|tojson }}, detected = {{ r.detected_at|tojson }};
+  const fmt = v => v >= 1 ? "$" + v.toFixed(2) : "$" + v.toPrecision(4);
+  const labels = {{ labels|tojson }};  // already in local time (CEST/CET)
+  const at = pts.findIndex(p => p[0] >= detected);
+  new Chart(document.getElementById("price"), {
+    type: "line",
+    data: { labels, datasets: [
+      { label: "Kurs", data: pts.map(p => p[1]), borderColor: css("--blue"), borderWidth: 2, tension: .2,
+        pointRadius: pts.map((_, i) => i === at ? 6 : 0), pointBackgroundColor: css("--pink"),
+        pointBorderColor: css("--panel"), pointBorderWidth: 2, pointHoverRadius: 5,
+        fill: { target: "origin" }, backgroundColor: css("--blue-soft") },
+      { label: "Cena przy wykryciu", data: pts.map(() => base), borderColor: css("--pink"), borderWidth: 2,
+        borderDash: [6, 4], pointRadius: 0, pointHoverRadius: 0 },
+    ] },
+    options: { maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+      plugins: { legend: { display: false }, tooltip: { callbacks: {
+        label: c => ` ${c.dataset.label}: ${fmt(c.parsed.y)}`,
+        afterBody: items => [`Od wykrycia: ${((items[0].parsed.y / base - 1) * 100).toFixed(1)}%`] } } },
+      scales: { x: { grid: { display: false }, ticks: { color: css("--muted"), maxTicksLimit: 8 } },
+                y: { grid: { color: css("--line") }, border: { display: false }, ticks: { color: css("--muted"), callback: v => fmt(v) } } } },
+  });
+</script>
+{% endif %}
+{% endblock %}

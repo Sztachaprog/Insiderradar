@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Wyniki · Insider Radar{% endblock %}
+{% block head %}
+<style>
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+  .chart-box { position: relative; height: 300px; }
+  .note { font-size: 12.5px; color: var(--muted); margin: -6px 0 12px; }
+</style>
+{% endblock %}
+{% block content %}
+  {% set now = perf.stats[0] %}
+  <p class="muted" style="margin:0 0 14px">Liczymy to od ceny z chwili, gdy zgłoszenie trafiło do aplikacji. Obowiązują filtry ze Skanera
+    ({{ summary.count }} transakcji, z czego {{ perf.rows|length }} ma już ceny). „Sesja” to dzień notowań, a SPY to ETF na S&amp;P 500, czyli punkt odniesienia.</p>
+
+  <section class="stats">
+    <div class="stat card"><b class="{{ 'up' if (now.avg or 0) >= 0 else 'down' }}">{{ now.avg|pct }}</b><small>średni wynik od dodania</small></div>
+    <div class="stat card"><b>{{ now.win_rate|pct(false) }}</b><small>trafień (wynik &gt; 0)</small></div>
+    <div class="stat card"><b class="up">{{ now.avg_win|pct }}</b><small>średni zysk trafionych</small></div>
+    <div class="stat card"><b class="down">{{ now.avg_loss|pct }}</b><small>średnia strata nietrafionych</small></div>
+    <div class="stat card"><b class="{{ 'up' if (now.alpha or 0) >= 0 else 'down' }}">{{ now.alpha|pct }}</b><small>średnio vs SPY</small></div>
+  </section>
+
+  {% if perf.rows %}
+  <div class="grid2">
+    <section class="card section">
+      <h2>Średnia ścieżka po dodaniu</h2>
+      <p class="note">Średni skumulowany wynik w kolejnych sesjach: sygnały insiderów kontra SPY w tych samych oknach czasu.</p>
+      <div class="legend"><span style="--c: var(--blue)">Zakupy insiderów</span><span class="dash" style="--c: var(--pink)">SPY</span></div>
+      <div class="chart-box"><canvas id="path"></canvas></div>
+    </section>
+    <section class="card section">
+      <h2>Rozkład wyników</h2>
+      <p class="note">Każdy słupek to jedna transakcja: niebieski oznacza zysk od dodania, różowy stratę.</p>
+      <div class="chart-box"><canvas id="dist"></canvas></div>
+    </section>
+  </div>
+  {% endif %}
+
+  <section class="card section">
+    <h2>Wyniki według horyzontu</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Horyzont</th><th class="num">Próba</th><th class="num">Średnio</th><th class="num">Mediana</th>
+          <th class="num">Trafność</th><th class="num">Śr. zysk</th><th class="num">Śr. strata</th><th class="num">vs SPY</th></tr></thead>
+        <tbody>
+        {% for s in perf.stats %}
+          <tr style="cursor:default">
+            <td>{{ s.label }}</td><td class="num">{{ s.n }}</td>
+            <td class="num {{ 'up' if (s.avg or 0) >= 0 else 'down' }}">{{ s.avg|pct }}</td>
+            <td class="num">{{ s.median|pct }}</td>
+            <td class="num">{{ s.win_rate|pct(false) }}</td>
+            <td class="num up">{{ s.avg_win|pct }}</td>
+            <td class="num down">{{ s.avg_loss|pct }}</td>
+            <td class="num {{ 'up' if (s.alpha or 0) >= 0 else 'down' }}">{{ s.alpha|pct }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {% set cal = perf.calibration %}{% set endpoint = 'results' %}{% set horizon = perf.horizon %}
+  {% set horizon_opts = [('now', 'Od dodania'), ('1', '1 sesja'), ('3', '3 sesje'), ('5', '1 tydz.'), ('20', '1 mies.')] %}
+  {% include "_calibration.html" %}
+
+  <section class="card table-wrap">
+    {% if perf.rows %}
+    <table>
+      <thead><tr><th>Spółka</th><th>Sygnał</th><th>Dodano</th><th class="num">Cena przy dodaniu</th><th class="num">Teraz</th>
+        <th class="num">Od dodania</th>{% for n, label in perf.horizons %}<th class="num">{{ label }}</th>{% endfor %}<th class="num">vs SPY</th></tr></thead>
+      <tbody>
+      {% for r in perf.rows %}
+        <tr onclick="location.href='{{ url_for('filing', accession=r.accession) }}'">
+          <td class="ticker"><b>{{ r.ticker }}</b><small>{{ r.owner }}</small></td>
+          <td>{% if r.signal.score is not none %}<span class="badge {{ r.signal.level }}"><i>{{ r.signal.score }}</i>{{ r.signal.label }}</span>{% endif %}</td>
+          <td class="mono">{{ r.base_date }}</td>
+          <td class="num">${{ "%.2f"|format(r.base_price) }}</td>
+          <td class="num">${{ "%.2f"|format(r.price_now) }}</td>
+          <td class="num"><b class="{{ 'up' if r.perf.now >= 0 else 'down' }}">{{ '▲' if r.perf.now >= 0 else '▼' }} {{ r.perf.now|pct }}</b></td>
+          {% for n, label in perf.horizons %}{% set h = r.perf.h.get(n) %}
+            <td class="num {{ ('up' if h.ret >= 0 else 'down') if h }}">{{ h.ret|pct if h else '—' }}</td>
+          {% endfor %}
+          <td class="num {{ 'up' if (r.perf.alpha_now or 0) >= 0 else 'down' }}">{{ r.perf.alpha_now|pct }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <div class="empty">Nic jeszcze nie jest śledzone. Ceny pobierają się automatycznie po każdym skanie.</div>
+    {% endif %}
+  </section>
+{% endblock %}
+{% block scripts %}
+{% if perf.rows %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const pct = v => (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "%";
+  const axis = { grid: { color: css("--line") }, border: { display: false }, ticks: { color: css("--muted"), callback: v => pct(v) } };
+  const path = {{ perf.path|tojson }}, bench = {{ perf.bench_path|tojson }};
+  const n = Math.max(path.length, bench.length);
+  new Chart(document.getElementById("path"), {
+    type: "line",
+    data: { labels: Array.from({ length: n }, (_, i) => i === 0 ? "dodano" : `S+${i}`),
+      datasets: [
+        { label: "Zakupy insiderów", data: path, borderColor: css("--blue"), borderWidth: 2, tension: .25, pointRadius: 0, pointHoverRadius: 5 },
+        { label: "SPY", data: bench, borderColor: css("--pink"), borderWidth: 2, borderDash: [6, 4], tension: .25, pointRadius: 0, pointHoverRadius: 5 },
+      ] },
+    options: { maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => ` ${c.dataset.label}: ${pct(c.parsed.y)}` } } },
+      scales: { x: { grid: { display: false }, ticks: { color: css("--muted"), maxTicksLimit: 8 } }, y: axis } },
+  });
+
+  const rows = {{ perf.rows|map(attribute='ticker')|list|tojson }};
+  const vals = {{ perf.rows|map(attribute='perf')|map(attribute='now')|list|tojson }};
+  const order = vals.map((v, i) => i).sort((a, b) => vals[b] - vals[a]);
+  new Chart(document.getElementById("dist"), {
+    type: "bar",
+    data: { labels: order.map(i => rows[i]),
+      datasets: [{ data: order.map(i => vals[i]), borderRadius: 4, borderSkipped: false, maxBarThickness: 28,
+        backgroundColor: order.map(i => vals[i] >= 0 ? css("--blue") : css("--pink")) }] },
+    options: { maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => ` ${c.label}: ${pct(c.parsed.y)}` } } },
+      scales: { x: { grid: { display: false }, ticks: { color: css("--muted") } }, y: axis } },
+  });
+</script>
+{% endif %}
+{% endblock %}

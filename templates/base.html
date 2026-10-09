@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Insider Radar{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f5f6fc; --panel: #ffffff; --panel-2: #eef0fa; --line: #e1e4f2; --text: #151933; --muted: #5f6789;
+    --blue: #2f5fe0; --pink: #d6337f; --blue-soft: rgba(47,95,224,.10); --pink-soft: rgba(214,51,127,.10);
+    --grad: linear-gradient(120deg, #2f5fe0, #8a4fd8 55%, #d6337f);
+    --up: var(--blue); --down: var(--pink); --shadow: 0 1px 2px rgba(21,25,51,.06), 0 8px 24px rgba(21,25,51,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0a0d1c; --panel: #11152b; --panel-2: #171c38; --line: #232a4b; --text: #e7e9f6; --muted: #8e96bb;
+      --blue: #6d97ff; --pink: #ff6fae; --blue-soft: rgba(109,151,255,.14); --pink-soft: rgba(255,111,174,.14);
+      --grad: linear-gradient(120deg, #5b86ff, #a26bff 55%, #ff6fae); --shadow: none;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0a0d1c; --panel: #11152b; --panel-2: #171c38; --line: #232a4b; --text: #e7e9f6; --muted: #8e96bb;
+    --blue: #6d97ff; --pink: #ff6fae; --blue-soft: rgba(109,151,255,.14); --pink-soft: rgba(255,111,174,.14);
+    --grad: linear-gradient(120deg, #5b86ff, #a26bff 55%, #ff6fae); --shadow: none;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 Inter, system-ui, sans-serif; }
+  body::before { content: ""; position: fixed; inset: 0 0 auto 0; height: 320px; z-index: -1;
+                 background: radial-gradient(60% 100% at 15% 0%, var(--blue-soft), transparent 70%),
+                             radial-gradient(50% 90% at 85% 0%, var(--pink-soft), transparent 70%); }
+  a { color: var(--blue); }
+  .wrap { max-width: 1320px; margin: 0 auto; padding: 22px 16px 48px; }
+  .mono, .num { font-family: "JetBrains Mono", monospace; font-variant-numeric: tabular-nums; }
+
+  header.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
+  .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--text); }
+  .brand .logo { width: 30px; height: 30px; border-radius: 9px; background: var(--grad); display: grid; place-items: center; }
+  .brand b { font: 700 19px "Space Grotesk", sans-serif; letter-spacing: -.02em; }
+  .brand b span { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  nav.tabs { display: flex; flex-wrap: wrap; gap: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 4px; }
+  nav.tabs a { padding: 6px 14px; border-radius: 999px; text-decoration: none; color: var(--muted); font-weight: 500; }
+  nav.tabs a.on { background: var(--grad); color: #fff; }
+  .status { color: var(--muted); font-size: 12.5px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .status form { margin: 0; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--blue); margin-right: 6px; }
+  .dot.busy { background: var(--pink); animation: pulse 1s infinite; }
+  .dot.err { background: var(--pink); }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .err-msg { color: var(--pink); }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
+  form.filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px;
+                 padding: 16px; margin-bottom: 16px; align-items: end; }
+  label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; font-weight: 500; }
+  label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--text); font-size: 13px; font-weight: 400; }
+  input[type=text], select { background: var(--bg); color: var(--text); border: 1px solid var(--line);
+         border-radius: 9px; padding: 8px 10px; font: inherit; }
+  input:focus, select:focus { outline: 2px solid var(--blue-soft); border-color: var(--blue); }
+  input[type=checkbox] { accent-color: var(--blue); }
+  button { font: 500 13px Inter, sans-serif; border-radius: 9px; padding: 8px 14px; cursor: pointer; border: 1px solid var(--line); }
+  .primary { background: var(--grad); color: #fff; border: 0; }
+  .ghost { background: var(--panel); color: var(--text); }
+  .ghost:hover { border-color: var(--blue); }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .stat { padding: 14px 16px; }
+  .stat b { display: block; font: 600 22px "JetBrains Mono", monospace; letter-spacing: -.02em; }
+  .stat small { color: var(--muted); }
+
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; vertical-align: middle; }
+  tbody tr:last-child td { border-bottom: 0; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; position: sticky; top: 0; background: var(--panel); }
+  th a { color: inherit; text-decoration: none; } th a.on { color: var(--blue); }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover td { background: var(--panel-2); }
+  th.num, td.num { text-align: right; }
+  td.ticker b { font: 600 14px "JetBrains Mono", monospace; }
+  td.ticker small, .sub { display: block; font-size: 11.5px; color: var(--muted); max-width: 230px; overflow: hidden; text-overflow: ellipsis; }
+  .chip { display: inline-block; background: var(--panel-2); border-radius: 6px; padding: 1px 7px; font-size: 11px; color: var(--muted); }
+  .chip.hot { background: var(--pink-soft); color: var(--pink); font-weight: 600; }
+  .up { color: var(--up); } .down { color: var(--down); }
+  .badge { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 2px 10px 2px 3px; font-size: 12px; font-weight: 600; }
+  .badge i { font: 600 11px "JetBrains Mono", monospace; font-style: normal; border-radius: 999px; padding: 1px 7px; }
+  .badge.strong { background: var(--grad); color: #fff; } .badge.strong i { background: rgba(255,255,255,.25); }
+  .badge.medium { background: var(--blue-soft); color: var(--blue); } .badge.medium i { background: var(--blue); color: #fff; }
+  .badge.weak { background: var(--panel-2); color: var(--muted); } .badge.weak i { background: var(--line); color: var(--text); }
+  .kind { font-size: 11px; color: var(--muted); display: block; margin-top: 3px; }
+  .empty { padding: 40px; text-align: center; color: var(--muted); }
+  .spark { display: block; }
+  footer { margin-top: 20px; color: var(--muted); font-size: 12px; }
+  h2 { font: 700 17px "Space Grotesk", sans-serif; margin: 0 0 12px; letter-spacing: -.01em; }
+  .section { padding: 18px; margin-bottom: 16px; }
+  .muted { color: var(--muted); }
+  .legend { display: flex; gap: 16px; font-size: 12px; color: var(--muted); flex-wrap: wrap; margin-bottom: 8px; }
+  .legend span::before { content: ""; display: inline-block; width: 16px; height: 0; border-top: 2px solid var(--c); margin-right: 6px; vertical-align: middle; }
+  .legend span.dash::before { border-top-style: dashed; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+  .chart-box { position: relative; height: 300px; }
+  .note { font-size: 12.5px; color: var(--muted); margin: -6px 0 12px; }
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-top: 14px; }
+  .facts div small { display: block; color: var(--muted); font-size: 11.5px; }
+  .facts div b { font: 600 15px "JetBrains Mono", monospace; }
+  ul.reasons { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 7px; }
+  ul.reasons li { display: grid; grid-template-columns: 20px 1fr; gap: 6px; }
+  ul.reasons li i { font-style: normal; font-weight: 700; text-align: center; border-radius: 6px; height: 20px; line-height: 20px; font-size: 12px; }
+  ul.reasons li.plus i { background: var(--blue-soft); color: var(--blue); }
+  ul.reasons li.minus i { background: var(--pink-soft); color: var(--pink); }
+  ul.reasons li.info i { background: var(--panel-2); color: var(--muted); }
+  .seg { display: inline-flex; gap: 2px; background: var(--panel-2); border-radius: 9px; padding: 3px; flex-wrap: wrap; }
+  .seg a { padding: 4px 10px; border-radius: 7px; text-decoration: none; color: var(--muted); font-size: 12.5px; }
+  .seg a.on { background: var(--panel); color: var(--text); box-shadow: var(--shadow); font-weight: 600; }
+  .range { position: relative; height: 8px; border-radius: 99px; background: linear-gradient(90deg, var(--blue-soft), var(--pink-soft)); margin: 18px 0 6px; }
+  .range i { position: absolute; top: -5px; width: 4px; height: 18px; border-radius: 2px; background: var(--text); transform: translateX(-2px); }
+  .range-labels { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--muted); }
+  .token { display: flex; align-items: center; gap: 10px; }
+  .token img { width: 26px; height: 26px; border-radius: 50%; background: var(--panel-2); }
+  @media (max-width: 640px) { .hide-sm { display: none; } }
+</style>
+{% block head %}{% endblock %}
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <a class="brand" href="{{ url_for('index') }}">
+      <span class="logo"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M2 12l4-4 3 3 5-6"/></svg></span>
+      <b>insider<span>radar</span></b>
+    </a>
+    <nav class="tabs">
+      {% set a = args.to_dict() if args.to_dict is defined else {} %}
+      {% set is_crypto = page in ['crypto', 'crypto_perf', 'strategies'] %}
+      <a href="{{ url_for('index') }}" class="{{ 'on' if page == 'scan' }}">Insiderzy</a>
+      <a href="{{ url_for('results', **(a if not is_crypto else {})) }}" class="{{ 'on' if page == 'perf' }}">Wyniki</a>
+      <a href="{{ url_for('crypto_index') }}" class="{{ 'on' if page == 'crypto' }}">Krypto</a>
+      <a href="{{ url_for('crypto_results', **(a if is_crypto else {})) }}" class="{{ 'on' if page == 'crypto_perf' }}">Krypto wyniki</a>
+      <a href="{{ url_for('crypto_strategies') }}" class="{{ 'on' if page == 'strategies' }}">Strategie</a>
+    </nav>
+    <div class="status">
+      {% if is_crypto %}
+        {% set cs = crypto_scanner %}
+        {% if cs.running %}<span><span class="dot busy"></span>Skanowanie CoinGecko…</span>
+        {% elif cs.last_error %}<span class="err-msg" title="{{ cs.last_error }}"><span class="dot err"></span>Błąd CoinGecko</span>
+        {% else %}<span><span class="dot"></span>Ostatni skan {{ cs.last_run or "—" }} (+{{ cs.last_new }} nowych)</span>{% endif %}
+        <span>auto co {{ crypto_interval }} min</span>
+        <form method="post" action="{{ url_for('crypto_scan_now') }}">
+          <button class="ghost" {% if cs.running %}disabled{% endif %}>Skanuj teraz</button>
+        </form>
+      {% else %}
+        {% if scanner.running %}
+          <span><span class="dot busy"></span>Skanowanie EDGAR…</span>
+        {% elif scanner.last_error %}
+          <span class="err-msg"><span class="dot err"></span>Błąd: {{ scanner.last_error }}</span>
+        {% else %}
+          <span><span class="dot"></span>Ostatni skan {{ scanner.last_run or "—" }} (+{{ scanner.last_new }} nowych)</span>
+        {% endif %}
+        {% if tracker and tracker.last_run %}<span>ceny {{ tracker.last_run }}{% if tracker.last_error %} · {{ tracker.last_error }}{% endif %}</span>{% endif %}
+        <span>auto co {{ interval }} min</span>
+        <form method="post" action="{{ url_for('scan_now') }}">
+          <button class="ghost" {% if scanner.running %}disabled{% endif %}>Skanuj teraz</button>
+        </form>
+      {% endif %}
+    </div>
+  </header>
+
+  {% block content %}{% endblock %}
+
+  <footer>Dane: SEC EDGAR (Form 4), Yahoo Finance, CoinGecko. Ocena sygnału to heurystyka, a nie porada inwestycyjna.</footer>
+</div>
+
+{% if scanner.running or (crypto_scanner and crypto_scanner.running and page in ['crypto', 'crypto_perf', 'strategies']) %}
+<script>
+  // Reload once the background scan finishes.
+  const poll = setInterval(async () => {
+    try {
+      const s = await (await fetch("{{ url_for('api_status') }}")).json();
+      if (!s.running && !s.crypto_running) { clearInterval(poll); location.reload(); }
+    } catch (e) { clearInterval(poll); }
+  }, 2000);
+</script>
+{% endif %}
+{% block scripts %}{% endblock %}
+</body>
+</html>
