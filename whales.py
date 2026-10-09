@@ -1,8 +1,9 @@
 """Whale tracker: big wallets that keep adding to a coin (Blockscout API).
 
 Ethereum works without a key (public eth.blockscout.com). With a free Blockscout PRO
-key (BLOCKSCOUT_API_KEY, dev.blockscout.com) the same scan also covers Base, Arbitrum,
-Optimism and Polygon, with smaller per-chain budgets to stay inside the free credits.
+key (BLOCKSCOUT_API_KEY, dev.blockscout.com) the same scan also covers Arbitrum and
+Optimism, with smaller per-chain budgets to stay inside the free credits. Base and
+Polygon need a paid plan (WHALE_CHAINS=ethereum,arbitrum,optimism,base,polygon).
 
 Discovery: the top holders of the ~150 largest ERC-20 tokens. Exchange wallets,
 bridges/pools (contracts) and burn addresses are filtered out using Blockscout's
@@ -32,10 +33,10 @@ import safety
 
 CHAINS = {
     "ethereum": {"id": 1, "label": "Ethereum", "explorer": "https://etherscan.io"},
-    "base": {"id": 8453, "label": "Base", "explorer": "https://basescan.org"},
+    "base": {"id": 8453, "label": "Base", "explorer": "https://basescan.org", "paid": True},
     "arbitrum": {"id": 42161, "label": "Arbitrum", "explorer": "https://arbiscan.io"},
     "optimism": {"id": 10, "label": "Optimism", "explorer": "https://optimistic.etherscan.io"},
-    "polygon": {"id": 137, "label": "Polygon", "explorer": "https://polygonscan.com"},
+    "polygon": {"id": 137, "label": "Polygon", "explorer": "https://polygonscan.com", "paid": True},
 }
 CHAIN = "ethereum"
 PUBLIC_ETH = "https://eth.blockscout.com/api/v2"      # free, no key; keeps PRO credits for the other chains
@@ -69,9 +70,13 @@ def api_key() -> str:
     return safety.extract_key(os.environ.get("BLOCKSCOUT_API_KEY", ""))
 
 
+# Since 2026-10-01 Base, Polygon (and zkSync) are no longer on Blockscout's Free tier.
+FREE_TIER = [c for c, info in CHAINS.items() if not info.get("paid")]
+
+
 def active_chains() -> list[str]:
-    """Ethereum always; the rest only with a PRO key. WHALE_CHAINS=ethereum,base narrows it."""
-    wanted = [c.strip() for c in os.environ.get("WHALE_CHAINS", ",".join(CHAINS)).split(",")]
+    """Ethereum always; free-tier chains with a PRO key. WHALE_CHAINS=ethereum,base,... overrides (paid plans)."""
+    wanted = [c.strip() for c in os.environ.get("WHALE_CHAINS", ",".join(FREE_TIER)).split(",")]
     return [c for c in wanted if c in CHAINS and (c == "ethereum" or api_key())]
 
 

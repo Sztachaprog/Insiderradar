@@ -186,7 +186,7 @@ def test_chains_need_key(monkeypatch):
     with pytest.raises(ValueError):
         whales.BlockscoutClient("base")
     monkeypatch.setenv("BLOCKSCOUT_API_KEY", "proapi_x")
-    assert whales.active_chains() == ["ethereum", "base", "arbitrum", "optimism", "polygon"]
+    assert whales.active_chains() == ["ethereum", "arbitrum", "optimism"]   # Base/Polygon are paid-only
     base = whales.BlockscoutClient("base")
     assert base.base == "https://api.blockscout.com/8453/api/v2" and base.params == {"apikey": "proapi_x"}
     assert whales.BlockscoutClient("ethereum").base == whales.PUBLIC_ETH            # no credits spent on Ethereum

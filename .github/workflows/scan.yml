@@ -34,7 +34,7 @@ jobs:
       FORM4_DB: form4.db
       SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
-      BLOCKSCOUT_API_KEY: ${{ secrets.BLOCKSCOUT_API_KEY }}   # optional: whales on Base, Arbitrum, Optimism, Polygon
+      BLOCKSCOUT_API_KEY: ${{ secrets.BLOCKSCOUT_API_KEY }}   # optional: whales on Arbitrum + Optimism (free tier)
       # Smaller per-run budgets: runs are frequent, so coverage builds up over the day.
       HISTORY_PER_RUN: "2"
       CRYPTO_DETAILS_PER_RUN: "5"
