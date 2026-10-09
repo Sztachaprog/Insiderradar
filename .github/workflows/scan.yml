@@ -3,9 +3,12 @@ name: Skan danych
 # Every ~10 min: one scan cycle (insiders, crypto, whales every ~30 min), the database
 # is kept on the `data` branch (one force-pushed commit, so history does not grow),
 # and a read-only snapshot of the app is published to GitHub Pages.
+# The every-10-minutes trigger comes from an external cron (cron-job.org) calling the
+# workflow_dispatch API - GitHub's own schedule is best-effort and often skipped.
+# The schedule below is only an hourly safety net.
 on:
   schedule:
-    - cron: "7-59/10 * * * *"   # :07, :17, ... - GitHub delays/skips runs at the top of the hour most
+    - cron: "47 * * * *"
   workflow_dispatch:
     inputs:
       whales:
