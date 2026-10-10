@@ -84,6 +84,11 @@ jobs:
           git add -A && git commit -qm "Dane $(date '+%Y-%m-%d %H:%M %Z')"
           git push -fq "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" data
 
+      - name: ls
+        run: |
+          ls -la 
+          pwd
+
       - name: Eksport strony
         run: python ci.py --no-scan
 
