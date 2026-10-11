@@ -9,7 +9,7 @@
       <tbody>
       {% for b in transfers %}
         <tr style="cursor:default">
-          <td class="mono">{{ b.ts|local("%d.%m.%y %H:%M") }}</td>
+          <td class="mono" data-sort="{{ b.ts }}">{{ b.ts|local("%d.%m.%y %H:%M") }}</td>
           {% if whale_map is defined %}{% set w = whale_map.get(b.address) %}
             <td><a href="{{ url_for('whale_wallet', address=b.address) }}" class="mono" style="color:inherit">{{ (w.label if w and w.label) or (b.address|short) }}</a></td>{% endif %}
           <td class="mono"><a href="{{ url_for('whale_token', token=b.token) }}" style="color:inherit">{{ b.symbol }}</a></td>

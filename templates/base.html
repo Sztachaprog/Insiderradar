@@ -32,6 +32,60 @@
                              radial-gradient(50% 90% at 85% 0%, var(--pink-soft), transparent 70%); }
   a { color: var(--blue); }
   .wrap { max-width: 1320px; margin: 0 auto; padding: 22px 16px 48px; }
+  .main { margin-left: var(--side-w); }
+  :root { --side-w: 68px; --side-open: 252px; }
+
+  /* Sidebar: icons only; expands over the page on hover, categories reveal their pages on hover. */
+  .side { position: fixed; inset: 0 auto 0 0; width: var(--side-w); z-index: 50; background: var(--panel);
+          border-right: 1px solid var(--line); display: flex; flex-direction: column; padding: 14px 10px; gap: 6px;
+          transition: width .18s ease, box-shadow .18s ease; overflow: hidden; }
+  .side:hover, .side.open { width: var(--side-open); box-shadow: 0 10px 40px rgba(10,13,28,.25); }
+  .side .lbl { white-space: nowrap; opacity: 0; transition: opacity .12s ease; }
+  .side:hover .lbl, .side.open .lbl { opacity: 1; }
+  .side-brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--text);
+                padding: 4px 6px 14px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+  .side-brand .logo { flex: 0 0 32px; width: 32px; height: 32px; border-radius: 10px; background: var(--grad);
+                      display: grid; place-items: center; }
+  .side-brand b { font: 700 18px "Space Grotesk", sans-serif; letter-spacing: -.02em; }
+  .side-brand b span { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .cat-head { display: flex; align-items: center; gap: 12px; padding: 9px 10px; border-radius: 11px; text-decoration: none;
+              color: var(--muted); font-weight: 600; }
+  .cat-head .ico { flex: 0 0 24px; height: 24px; display: grid; place-items: center; border-radius: 8px; }
+  .cat-head .chev { margin-left: auto; font-size: 12px; transition: transform .15s ease; }
+  .cat:hover .cat-head, .cat-head:focus { background: var(--panel-2); color: var(--text); }
+  .cat.current .cat-head { color: var(--text); }
+  .cat.current .cat-head .ico { background: var(--grad); color: #fff; }
+  .subs { display: grid; overflow: hidden; max-height: 0; transition: max-height .2s ease; padding-left: 34px; }
+  .side:hover .cat:hover .subs, .side:hover .cat.current .subs, .side.open .subs { max-height: 240px; }
+  .side:hover .cat:hover .chev, .side.open .chev { transform: rotate(90deg); }
+  .subs a { display: block; padding: 7px 12px; margin: 1px 0; border-radius: 9px; text-decoration: none; color: var(--muted);
+            font-size: 13.5px; font-weight: 500; }
+  .subs a:hover { background: var(--panel-2); color: var(--text); }
+  .subs a.on { background: var(--blue-soft); color: var(--blue); font-weight: 600; }
+  .side-foot { margin-top: auto; font-size: 11px; color: var(--muted); padding: 8px 6px 0; border-top: 1px solid var(--line); }
+  .menu-btn { display: none; }
+  .crumb { display: flex; align-items: center; gap: 10px; }
+  .crumb h1 { font: 700 22px "Space Grotesk", sans-serif; margin: 0; letter-spacing: -.02em; }
+  .crumb small { color: var(--muted); font-weight: 500; }
+  .scrim { display: none; }
+  @media (max-width: 900px) {
+    .main { margin-left: 0; }
+    .side { width: var(--side-open); transform: translateX(-102%); transition: transform .2s ease; }
+    .side:hover { width: var(--side-open); }
+    .side.open { transform: none; }
+    .side .lbl { opacity: 1; }
+    .subs { max-height: 240px; }
+    .menu-btn { display: inline-grid; place-items: center; width: 38px; height: 38px; padding: 0; font-size: 18px;
+                background: var(--panel); color: var(--text); }
+    .scrim.show { display: block; position: fixed; inset: 0; background: rgba(10,13,28,.4); z-index: 40; }
+  }
+
+  /* Click-to-sort tables */
+  th.sortable { cursor: pointer; user-select: none; }
+  th.sortable:hover { color: var(--text); }
+  th.sortable::after { content: " ↕"; opacity: .25; font-size: 11px; }
+  th.sorted-asc::after { content: " ▲"; opacity: 1; color: var(--blue); }
+  th.sorted-desc::after { content: " ▼"; opacity: 1; color: var(--blue); }
   .mono, .num { font-family: "JetBrains Mono", monospace; font-variant-numeric: tabular-nums; }
 
   header.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
@@ -39,9 +93,6 @@
   .brand .logo { width: 30px; height: 30px; border-radius: 9px; background: var(--grad); display: grid; place-items: center; }
   .brand b { font: 700 19px "Space Grotesk", sans-serif; letter-spacing: -.02em; }
   .brand b span { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  nav.tabs { display: flex; flex-wrap: wrap; gap: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 4px; }
-  nav.tabs a { padding: 6px 14px; border-radius: 999px; text-decoration: none; color: var(--muted); font-weight: 500; }
-  nav.tabs a.on { background: var(--grad); color: #fff; }
   .status { color: var(--muted); font-size: 12.5px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .status form { margin: 0; }
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--blue); margin-right: 6px; }
@@ -130,22 +181,48 @@
 {% block head %}{% endblock %}
 </head>
 <body>
-<div class="wrap">
+{% set a = args.to_dict() if args.to_dict is defined else {} %}
+{% set is_crypto = page in ['crypto', 'crypto_perf', 'strategies'] %}
+{% set NAV = [
+  ('stocks', 'Spółki', [('scan', 'Insiderzy', url_for('index')), ('perf', 'Wyniki spółek', url_for('results'))]),
+  ('crypto', 'Krypto', [('crypto', 'Kryptowaluty spot', url_for('crypto_index')),
+                        ('strategies', 'Strategie lev', url_for('crypto_strategies')),
+                        ('whales', 'Wieloryby', url_for('whales_index')),
+                        ('crypto_perf', 'Wyniki', url_for('crypto_results'))]),
+] %}
+<aside class="side" id="side" aria-label="Menu">
+  <a class="side-brand" href="{{ url_for('index') }}">
+    <span class="logo"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M2 12l4-4 3 3 5-6"/></svg></span>
+    <b class="lbl">insider<span>radar</span></b>
+  </a>
+  <nav>
+    {% for key, label, items in NAV %}
+      {% set current = page in items|map(attribute=0)|list %}
+      <div class="cat {{ 'current' if current }}">
+        <a class="cat-head" href="{{ items[0][2] }}">
+          <span class="ico">{% if key == 'stocks' %}<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M5 21V9l7-5 7 5v12M9 21v-6h6v6"/></svg>{% else %}<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 8h4a2 2 0 010 4h-4m0 0h4.5a2 2 0 010 4H9.5M9.5 8v8M11 6v2m0 8v2"/></svg>{% endif %}</span>
+          <span class="lbl">{{ label }}</span><span class="chev lbl">›</span>
+        </a>
+        <div class="subs">
+          {% for p, l, u in items %}<a href="{{ u }}" class="{{ 'on' if page == p }}"><span class="lbl">{{ l }}</span></a>{% endfor %}
+        </div>
+      </div>
+    {% endfor %}
+  </nav>
+  <div class="side-foot lbl">Analiza danych, nie porada inwestycyjna.</div>
+</aside>
+<div class="scrim" id="scrim"></div>
+
+<div class="main"><div class="wrap">
   <header class="top">
-    <a class="brand" href="{{ url_for('index') }}">
-      <span class="logo"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M2 12l4-4 3 3 5-6"/></svg></span>
-      <b>insider<span>radar</span></b>
-    </a>
-    <nav class="tabs">
-      {% set a = args.to_dict() if args.to_dict is defined else {} %}
-      {% set is_crypto = page in ['crypto', 'crypto_perf', 'strategies'] %}
-      <a href="{{ url_for('index') }}" class="{{ 'on' if page == 'scan' }}">Insiderzy</a>
-      <a href="{{ url_for('results', **(a if not is_crypto else {})) }}" class="{{ 'on' if page == 'perf' }}">Wyniki</a>
-      <a href="{{ url_for('crypto_index') }}" class="{{ 'on' if page == 'crypto' }}">Krypto</a>
-      <a href="{{ url_for('crypto_results', **(a if is_crypto else {})) }}" class="{{ 'on' if page == 'crypto_perf' }}">Krypto wyniki</a>
-      <a href="{{ url_for('crypto_strategies') }}" class="{{ 'on' if page == 'strategies' }}">Strategie</a>
-      <a href="{{ url_for('whales_index') }}" class="{{ 'on' if page == 'whales' }}">Wieloryby</a>
-    </nav>
+    {% set crumbs = {'scan': ('Spółki', 'Insiderzy'), 'perf': ('Spółki', 'Wyniki spółek'),
+                     'crypto': ('Krypto', 'Kryptowaluty spot'), 'strategies': ('Krypto', 'Strategie lev'),
+                     'whales': ('Krypto', 'Wieloryby'), 'crypto_perf': ('Krypto', 'Wyniki')} %}
+    <div class="crumb">
+      <button class="menu-btn ghost" id="menu-btn" aria-label="Menu">☰</button>
+      {% set cr = crumbs.get(page, ('', 'Insider Radar')) %}
+      <div><small>{{ cr[0] }}</small><h1>{% block heading %}{{ cr[1] }}{% endblock %}</h1></div>
+    </div>
     <div class="status">
       {% if page == 'whales' %}
         {% set ws = whale_scanner %}
@@ -196,8 +273,8 @@
   {% endif %}
   {% block content %}{% endblock %}
 
-  <footer>Dane: SEC EDGAR (Form 4), Yahoo Finance, CoinGecko, Blockscout. Ocena sygnału to heurystyka, a nie porada inwestycyjna.</footer>
-</div>
+  <footer>Dane: SEC EDGAR (Form 4), Yahoo Finance, CoinGecko, Blockscout, Helius, Jupiter, Google News. Ocena sygnału to heurystyka, a nie porada inwestycyjna.</footer>
+</div></div>
 
 {% if scanner.running or (crypto_scanner and crypto_scanner.running and page in ['crypto', 'crypto_perf', 'strategies']) or (whale_scanner and whale_scanner.running and page == 'whales') %}
 <script>
@@ -230,6 +307,55 @@
   })();
 </script>
 {% endif %}
+<script>
+  // Mobile: the sidebar opens with the ☰ button (no hover on touch screens).
+  (() => {
+    const side = document.getElementById("side"), scrim = document.getElementById("scrim");
+    const toggle = open => { side.classList.toggle("open", open); scrim.classList.toggle("show", open); };
+    document.getElementById("menu-btn").addEventListener("click", () => toggle(!side.classList.contains("open")));
+    scrim.addEventListener("click", () => toggle(false));
+  })();
+
+  // Click any column header to sort. Numbers understand $, %, mln/mld/bln/tys, the minus sign "−" and arrows;
+  // cells can carry data-sort (e.g. ISO time) to override what is shown. Empty cells ("—") always go last.
+  (() => {
+    const UNITS = { bln: 1e12, mld: 1e9, mln: 1e6, tys: 1e3, k: 1e3 };
+    const NUM = /^[\s▲▼↑↓+]*(-|−)?\s*\$?\s*(\d[\d,]*(?:\.\d+)?)\s*(bln|mld|mln|tys\.?|k)?(?![\dA-Za-z])/i;
+    const value = td => {
+      if (!td) return null;
+      const raw = (td.dataset.sort ?? td.innerText).trim();
+      if (!raw || raw === "—" || raw === "-") return null;
+      if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw;                 // ISO dates: compare as text
+      const m = raw.replace(/\u2212/g, "-").match(NUM);
+      if (!m) return raw.toLowerCase();
+      const n = parseFloat(m[2].replace(/,/g, "")) * (UNITS[(m[3] || "").replace(".", "").toLowerCase()] || 1);
+      return m[1] ? -n : n;
+    };
+    document.querySelectorAll("table").forEach(table => {
+      if (!table.tHead || !table.tBodies.length) return;
+      [...table.tHead.rows[0].cells].forEach((th, col) => {
+        if ("nosort" in th.dataset) return;
+        th.classList.add("sortable");
+        th.addEventListener("click", e => {
+          e.preventDefault();
+          const body = table.tBodies[0], rows = [...body.rows];
+          const vals = rows.map(r => value(r.cells[col]));
+          const numeric = vals.some(v => typeof v === "number");
+          const asc = th.classList.contains("sorted-desc") || (!th.className.includes("sorted") && !numeric);
+          [...table.tHead.rows[0].cells].forEach(h => h.classList.remove("sorted-asc", "sorted-desc"));
+          th.classList.add(asc ? "sorted-asc" : "sorted-desc");
+          const order = rows.map((r, i) => i).sort((i, j) => {
+            const a = vals[i], b = vals[j];
+            if (a === null || b === null) return a === null ? (b === null ? 0 : 1) : -1;
+            const cmp = typeof a === typeof b ? (a < b ? -1 : a > b ? 1 : 0) : (typeof a === "number" ? -1 : 1);
+            return asc ? cmp : -cmp;
+          });
+          order.forEach(i => body.appendChild(rows[i]));
+        });
+      });
+    });
+  })();
+</script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

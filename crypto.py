@@ -33,7 +33,8 @@ TRACK_DAYS = 30
 DETAILS_PER_RUN = int(os.environ.get("CRYPTO_DETAILS_PER_RUN", "8"))  # project info calls per scan
 NEWS_PER_RUN = int(os.environ.get("CRYPTO_NEWS_PER_RUN", "8"))        # Google News searches per scan
 NEWS_MAX_AGE_H = 6
-DEDUPE_HOURS = 72                                                  # one event per coin per 3 days
+DEDUPE_HOURS = 72
+MAX_SANE_VOL_RATIO = 50   # CoinGecko occasionally reports absurd volumes; above this the number is a data error                                                  # one event per coin per 3 days
 BENCHMARK = "bitcoin"
 HORIZONS = [(1, "1 h"), (24, "24 h"), (72, "3 dni"), (168, "7 dni")]
 SKIP_NAME = re.compile(r"\b(wrapped|bridged|staked|liquid staking|restaked|usd|eur|tokenized)\b", re.I)
@@ -246,7 +247,7 @@ def triggers_for(coin: dict, trending: set[str]) -> list[str]:
         out.append("dump24")
     if abs(ch1) >= 0.10:
         out.append("move1h")
-    if vol / mcap >= 0.6:
+    if 0.6 <= vol / mcap <= MAX_SANE_VOL_RATIO:
         out.append("volume")
     if coin["id"] in trending:
         out.append("trending")
@@ -326,6 +327,8 @@ def analyze(event: dict, details: dict | None, weights: dict | None = None) -> d
         reasons.append(("+" if pts > 0 else "-" if pts < 0 else "·", why))
 
     ratio = vol / mcap if mcap else 0
+    if ratio > MAX_SANE_VOL_RATIO:  # broken volume figure: ignore it rather than score it
+        ratio = 0
     if ratio > 2:
         add("vol_extreme", f"Wolumen to {ratio:.1f}× kapitalizacji. To skrajnie dużo i może być sztucznie nakręcone.")
     elif ratio >= 0.6:

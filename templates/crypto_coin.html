@@ -114,7 +114,7 @@
       <thead><tr><th>Wykryto</th><th>Ruch</th><th class="num">Ocena</th><th class="num">Od wykrycia</th></tr></thead>
       <tbody>
       {% for o in others %}
-        <tr onclick="location.href='{{ url_for('crypto_event', event_id=o.id) }}'"><td class="mono" title="{{ o.detected_at|local }}">{{ o.detected_at|ago }}</td>
+        <tr onclick="location.href='{{ url_for('crypto_event', event_id=o.id) }}'"><td class="mono" title="{{ o.detected_at|local }}" data-sort="{{ o.detected_at }}">{{ o.detected_at|ago }}</td>
           <td>{{ o.trigger_labels|join(', ') }}</td><td class="num">{{ o.signal.score }}</td>
           <td class="num {{ ('up' if o.perf.now >= 0 else 'down') if o.perf.now is not none }}">{{ o.perf.now|pct }}</td></tr>
       {% endfor %}

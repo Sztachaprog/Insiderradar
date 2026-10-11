@@ -71,7 +71,7 @@
           {% for t in candidates %}{% set row = t.row %}
             <tr onclick="location.href='{{ url_for('crypto_event', event_id=row.id) }}'">
               <td><b class="mono">{{ row.symbol }}</b><span class="sub">{{ row.trigger_labels|join(', ') }} · ocena {{ row.signal.score }}</span></td>
-              <td class="mono">{{ row.detected_at|local("%H:%M") }}</td>
+              <td class="mono" data-sort="{{ row.detected_at }}">{{ row.detected_at|local("%H:%M") }}</td>
               <td class="num">{{ t.entry|usd }}</td>
               <td class="num {{ ('up' if t.gross >= 0 else 'down') if t.gross is not none }}">{{ t.gross|pct }}</td>
               <td class="num">{{ (t.entry * (1 + (selected.full.tp)))|usd }}<span class="sub">{{ (t.entry * (1 - (selected.full.sl)))|usd }}</span></td>
@@ -135,9 +135,9 @@
       {% for t in r.trades %}{% set row = t.row %}
         <tr onclick="location.href='{{ url_for('crypto_event', event_id=row.id) }}'">
           <td><b class="mono">{{ row.symbol }}</b><span class="sub">{{ row.trigger_labels|join(', ') }} · ocena {{ row.signal.score }}</span></td>
-          <td class="mono">{{ t.entry_at|local("%d.%m %H:%M") }}</td>
+          <td class="mono" data-sort="{{ t.entry_at }}">{{ t.entry_at|local("%d.%m %H:%M") }}</td>
           <td class="num">{{ t.entry|usd }}</td>
-          <td class="mono">{{ t.exit_at|local("%d.%m %H:%M") if t.exit_at else '—' }}</td>
+          <td class="mono" data-sort="{{ t.exit_at or '' }}">{{ t.exit_at|local("%d.%m %H:%M") if t.exit_at else '—' }}</td>
           <td class="num">{% if t.status == 'closed' %}{{ t.reason }}{% elif t.status == 'open' %}<span class="chip">otwarta</span>{% else %}<span class="chip">brak danych</span>{% endif %}</td>
           <td class="num up">{{ t.peak|pct }}</td>
           <td class="num down">{{ t.trough|pct }}</td>

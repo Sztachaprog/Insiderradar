@@ -265,3 +265,18 @@ def test_history_lookup_and_for_filing():
     assert data["buys"][0]["ret"]["21"] > 0                       # rising fake series
     assert history.for_filing(data, "other", "2026-12-01")["summary"][21]["n"] == 1
     assert history.for_filing(data, "other", "2026-01-01") is None   # only buys *before* the filing count
+
+
+def test_absurd_volume_is_treated_as_data_error():
+    c = coin(vol=5e12, ch24=3, ch1=0)                      # volume 100,000x market cap: CoinGecko glitch
+    assert "volume" not in crypto.triggers_for(c, set())
+    e = event(triggers=("trending",), vol=5e12)
+    assert not {"vol_spike", "vol_extreme"} & set(crypto.analyze(e, None)["factors"])
+
+
+def test_sidebar_navigation_and_sections(client):
+    html = client.get("/krypto/wyniki").get_data(as_text=True)
+    for label in ("Spółki", "Insiderzy", "Wyniki spółek", "Krypto", "Kryptowaluty spot", "Strategie lev", "Wieloryby"):
+        assert label in html
+    assert "Podsumowanie krypto" in html and "Strategie lev: porównanie" in html and "Wieloryby: sygnały spot" in html
+    assert 'class="on"' in html                              # current page highlighted in the menu

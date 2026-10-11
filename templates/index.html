@@ -51,8 +51,7 @@
 
   {% set sort = args.get('sort', 'value') %}
   {% macro sort_link(key, label) -%}
-    {% set a = args.to_dict() %}{% set _ = a.update({'sort': key}) %}
-    <a href="{{ url_for('index', **a) }}" class="{{ 'on' if sort == key }}">{{ label }}{{ ' ↓' if sort == key }}</a>
+    {{ label }}
   {%- endmacro %}
 
   <div class="table-wrap card">

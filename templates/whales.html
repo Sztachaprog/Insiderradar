@@ -68,7 +68,7 @@
         <tbody>
         {% for b in big %}
           <tr onclick="location.href='{{ url_for('whale_wallet', address=b.address) }}'">
-            <td class="mono">{{ b.ts|local("%d.%m %H:%M") }}</td>
+            <td class="mono" data-sort="{{ b.ts }}">{{ b.ts|local("%d.%m %H:%M") }}</td>
             <td><b class="mono">{{ b.whale.label or (b.address|short) }}</b><span class="sub">{{ b.address|short }}</span></td>
             <td class="mono"><a href="{{ url_for('whale_token', token=b.token) }}" onclick="event.stopPropagation()" style="color:inherit">{{ b.symbol }}</a></td>
             <td class="num"><b>{{ b.usd|money }}</b></td>
@@ -109,7 +109,7 @@
             <td>{% for s in w.acc %}<span class="chip" style="background:var(--blue-soft);color:var(--blue)">{{ s }}</span> {% endfor %}</td>
             <td>{% for s in w.dist %}<span class="chip hot">{{ s }}</span> {% endfor %}</td>
             <td class="num {{ ('up' if w.net30_usd > 0 else 'down') if w.net30_usd }}">{{ w.net30_usd|money if w.net30_usd else '—' }}</td>
-            <td class="mono">{{ w.last|local("%d.%m.%Y") if w.last else '—' }}</td>
+            <td class="mono" data-sort="{{ w.last or '' }}">{{ w.last|local("%d.%m.%Y") if w.last else '—' }}</td>
           </tr>
         {% endfor %}
         </tbody>

@@ -534,7 +534,7 @@ def build_crypto_rows(cdata: dict, args) -> tuple[list[dict], dict]:
                      "ch1h": (m.get("price_change_percentage_1h_in_currency") or 0) / 100,
                      "ch24": (m.get("price_change_percentage_24h_in_currency") or 0) / 100,
                      "ch7d": (m.get("price_change_percentage_7d_in_currency") or 0) / 100,
-                     "vol_ratio": (m.get("total_volume") or 0) / mcap if mcap else None,
+                     "vol_ratio": vr if mcap and (vr := (m.get("total_volume") or 0) / mcap) <= crypto.MAX_SANE_VOL_RATIO else None,
                      "trigger_labels": [crypto.TRIGGER_LABELS[t] for t in e["triggers"]]})
 
     sort = args.get("sort", "time")
@@ -691,7 +691,7 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         closes = closes[max(0, (start[0] if start else len(closes)) - 60):]  # ~3 months of context
         return render_template("filing.html", r=row, f=f, company=md["companies"].get(f.ticker, {}),
                                closes=closes, horizons=market.HORIZONS,
-                               history_horizons=history.HORIZONS, **common(page=""))
+                               history_horizons=history.HORIZONS, **common(page="scan"))
 
     @app.post("/scan")
     def scan_now():
@@ -705,13 +705,39 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         rows, summary = build_crypto_rows(crypto_data(), request.args)
         return render_template("crypto.html", rows=rows, summary=summary, **common(page="crypto"))
 
+    def strategy_catalog(rows, prices, now, fee=strategy.FEE, stake=strategy.STAKE, custom=None) -> list[dict]:
+        """Presets + saved strategies (+ an unsaved editor preview), each backtested on the stored moves."""
+        catalog = [{"key": k, "name": n, "desc": d, "params": p, "saved": False} for k, n, d, p in strategy.PRESETS]
+        catalog += [{"key": f"c{s['id']}", "id": s["id"], "name": s["name"], "desc": "Twoja strategia",
+                     "params": s["params"], "saved": True} for s in cstore.strategies()]
+        if custom is not None:
+            catalog.append({"key": "custom", "name": "Nowa (niezapisana)", "desc": "Podgląd z edytora",
+                            "params": custom, "saved": False})
+        for s in catalog:
+            s["result"] = strategy.backtest(rows, prices, s["params"], now, fee, stake)
+            s["rules"] = strategy.describe(s["params"])
+            s["full"] = {**strategy.DEFAULTS, **s["params"]}
+        return catalog
+
     @app.get("/krypto/wyniki")
     def crypto_results():
         cd = crypto_data()
         rows, summary = build_crypto_rows(cd, request.args)
         perf = crypto_performance_view(rows, cd["weights"], request.args.get("h", "24"))
+        # Summary of every crypto section: spot radar (above), leveraged strategies, whale spot signals.
+        all_rows, _ = build_crypto_rows(cd, {})
+        strategies = strategy_catalog(all_rows, cd["prices"], crypto.utcnow())
+        ranked = sorted((s for s in strategies if s["result"]["closed"]), key=lambda s: -s["result"]["pnl"])
+        wdata = whale_xtb(whales.build(wstore))
+        wsignals = sorted((t for t in wdata["tokens"] if t.get("signal")),
+                          key=lambda t: t["signal"]["flagged_at"], reverse=True)
+        wrets = [t["perf"]["now"] for t in wsignals if t.get("perf") and t["perf"]["now"] is not None]
+        whale_summary = {"n": len(wsignals), "avg": sum(wrets) / len(wrets) if wrets else None,
+                         "win_rate": sum(r > 0 for r in wrets) / len(wrets) if wrets else None}
         return render_template("crypto_perf.html", perf=perf, summary=summary, scope="crypto",
-                               **common(page="crypto_perf"))
+                               strategies=strategies, best=ranked[0] if ranked else None,
+                               wsignals=wsignals, whale_summary=whale_summary,
+                               whale_horizons=whales.HORIZONS, **common(page="crypto_perf"))
 
     @app.get("/krypto/<int:event_id>")
     def crypto_event(event_id):
@@ -725,7 +751,7 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         others = [r for r in rows if r["coin_id"] == row["coin_id"] and r["id"] != event_id]
         labels = [crypto.local(ts, "%d.%m %H:%M") for ts, _ in points]
         return render_template("crypto_coin.html", r=row, points=points, labels=labels, others=others,
-                               horizons=crypto.HORIZONS, **common(page=""))
+                               horizons=crypto.HORIZONS, **common(page="crypto"))
 
     @app.get("/krypto/strategie")
     def crypto_strategies():
@@ -734,18 +760,8 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         now = crypto.utcnow()
         fee = (_float(request.args.get("fee")) or strategy.FEE * 100) / 100
         stake = _float(request.args.get("stake")) or strategy.STAKE
-        saved = cstore.strategies()
-        catalog = [{"key": k, "name": n, "desc": d, "params": p, "saved": False} for k, n, d, p in strategy.PRESETS]
-        catalog += [{"key": f"c{s['id']}", "id": s["id"], "name": s["name"], "desc": "Twoja strategia",
-                     "params": s["params"], "saved": True} for s in saved]
         custom = strategy.params_from_form(request.args) if request.args.get("custom") else None
-        if custom is not None:
-            catalog.append({"key": "custom", "name": "Nowa (niezapisana)", "desc": "Podgląd z edytora",
-                            "params": custom, "saved": False})
-        for s in catalog:
-            s["result"] = strategy.backtest(rows, cd["prices"], s["params"], now, fee, stake)
-            s["rules"] = strategy.describe(s["params"])
-            s["full"] = {**strategy.DEFAULTS, **s["params"]}
+        catalog = strategy_catalog(rows, cd["prices"], now, fee, stake, custom)
         selected_key = request.args.get("s") or ("custom" if custom is not None else catalog[0]["key"])
         selected = next((s for s in catalog if s["key"] == selected_key), catalog[0])
         # Entry candidates right now: matching events from the last hour that are still open.
