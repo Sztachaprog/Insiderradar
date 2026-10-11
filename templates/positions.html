@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}{{ heading }} · Strategie lev{% endblock %}
+{% block content %}
+  {% include "_tabs.html" %}
+  {% if mode == 'open' %}
+    <p class="muted" style="margin:0 0 14px">Pozycje, które strategie mają teraz otwarte: wejście po cenie z chwili wykrycia, a wyjście, gdy kurs dotknie TP lub SL albo minie czas.
+      Kliknij wiersz, żeby zobaczyć wykres pozycji, albo nazwę tokena, żeby przejść do jego strony z newsami.</p>
+  {% else %}
+    <p class="muted" style="margin:0 0 14px">Zamknięte transakcje wszystkich strategii, od najnowszych. „Historia” oznacza sygnały odtworzone z 2 miesięcy danych Binance.
+      Kliknij wiersz, żeby zobaczyć wykres transakcji.</p>
+    {% if strategy_names %}
+    <div class="card" style="padding:12px 14px; margin-bottom:14px; display:flex; gap:14px; align-items:end; flex-wrap:wrap">
+      <label>Strategia
+        <select id="flt-strategy"><option value="">wszystkie</option>{% for n in strategy_names %}<option>{{ n }}</option>{% endfor %}</select></label>
+      <label>Pochodzenie
+        <select id="flt-origin"><option value="">wszystkie</option><option value="live">na żywo</option><option value="backfill">historia</option></select></label>
+      <label>Wynik
+        <select id="flt-result"><option value="">wszystkie</option><option value="win">zysk</option><option value="loss">strata</option></select></label>
+      <span class="muted" id="flt-summary" style="font-size:12.5px"></span>
+    </div>
+    {% endif %}
+  {% endif %}
+
+  <section class="card table-wrap">
+  {% if positions %}
+    <table id="positions">
+      <thead><tr><th>Token</th><th>Strategia</th><th>Wejście</th><th class="num">Cena wejścia</th>
+        {% if mode == 'open' %}<th class="num">Teraz</th><th class="num">Wynik</th><th class="num">TP / SL</th><th>Koniec</th>
+        {% else %}<th>Wyjście</th><th class="num">Cena wyjścia</th><th class="num">Powód</th><th class="num">Wynik netto</th><th>Dane</th>{% endif %}</tr></thead>
+      <tbody>
+      {% for t in positions %}{% set row = t.row %}
+        <tr onclick="location.href='{{ url_for('position', key=t.strategy_key, event_id=t.event_id) }}'"
+            data-strategy="{{ t.strategy_name }}" data-origin="{{ row.origin }}" data-net="{{ t.net if t.net is not none else '' }}">
+          <td><a href="{{ url_for('crypto_event', event_id=row.id) }}" onclick="event.stopPropagation()" style="color:inherit"><b class="mono">{{ row.symbol }}</b></a>
+            {% if row.origin == 'backfill' %} <span class="chip">historia</span>{% endif %}
+            <span class="sub">{{ row.name }} · {{ row.trigger_labels|join(', ') }}</span></td>
+          <td>{{ t.strategy_name }}</td>
+          <td class="mono" data-sort="{{ t.entry_at }}">{{ t.entry_at|local("%d.%m %H:%M") }}</td>
+          <td class="num">{{ t.entry|usd }}</td>
+          {% if mode == 'open' %}
+            <td class="num">{{ t.now_price|usd if t.now_price else '—' }}</td>
+            <td class="num"><b class="{{ ('up' if t.now_ret >= 0 else 'down') if t.now_ret is not none }}">{{ ('▲ ' if t.now_ret >= 0 else '▼ ') if t.now_ret is not none }}{{ t.now_ret|pct }}</b></td>
+            <td class="num">{{ t.tp_price|usd }}<span class="sub">{{ t.sl_price|usd }}</span></td>
+            <td class="mono" data-sort="{{ t.deadline }}">{{ t.deadline|local("%d.%m %H:%M") }}</td>
+          {% else %}
+            <td class="mono" data-sort="{{ t.exit_at }}">{{ t.exit_at|local("%d.%m %H:%M") }}</td>
+            <td class="num">{{ t.exit|usd }}</td>
+            <td class="num">{{ t.reason }}</td>
+            <td class="num"><b class="{{ ('up' if t.net >= 0 else 'down') if t.net is not none }}">{{ t.net|pct }}</b></td>
+            <td>{% if t.source == 'candles' %}<span class="chip" style="background:var(--blue-soft);color:var(--blue)">świece</span>{% else %}<span class="chip">zdjęcia cen</span>{% endif %}</td>
+          {% endif %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">{% if mode == 'open' %}Żadna strategia nie ma teraz otwartej pozycji. Nowe otwierają się, gdy radar wykryje pasujący ruch.{% else %}Brak zamkniętych transakcji w dzienniku.{% endif %}</div>
+  {% endif %}
+  </section>
+{% endblock %}
+{% block scripts %}
+{% if mode == 'history' %}
+<script>
+  // Client-side filters (work on the static site too) + a live summary of what is shown.
+  (() => {
+    const rows = [...document.querySelectorAll("#positions tbody tr")];
+    const f = { s: document.getElementById("flt-strategy"), o: document.getElementById("flt-origin"), r: document.getElementById("flt-result") };
+    const out = document.getElementById("flt-summary");
+    const apply = () => {
+      let n = 0, wins = 0, sum = 0;
+      rows.forEach(tr => {
+        const net = parseFloat(tr.dataset.net);
+        const ok = (!f.s.value || tr.dataset.strategy === f.s.value) && (!f.o.value || tr.dataset.origin === f.o.value)
+          && (!f.r.value || (f.r.value === "win" ? net > 0 : net <= 0));
+        tr.style.display = ok ? "" : "none";
+        if (ok && !isNaN(net)) { n++; sum += net; wins += net > 0; }
+      });
+      out.textContent = n ? `${n} transakcji · trafność ${(wins / n * 100).toFixed(0)}% · średnio ${(sum / n * 100 >= 0 ? "+" : "")}${(sum / n * 100).toFixed(2)}% · na $100: ${(sum * 100 >= 0 ? "+" : "")}${(sum * 100).toFixed(2)} $` : "brak transakcji";
+    };
+    Object.values(f).forEach(el => el && el.addEventListener("change", apply));
+    apply();
+  })();
+</script>
+{% endif %}
+{% endblock %}

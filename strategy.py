@@ -29,6 +29,7 @@ DEFAULTS = {
     "min_vol": None, "max_vol": None,         # volume / market cap at detection
     "tp": 0.10, "sl": 0.05, "hold_h": 24,
 }
+REFERENCE_ONLY = {"all"}   # baseline "buy every signal": compared against, not listed as positions
 FEE = 0.005      # round trip: ~0.1% exchange fee per side + slippage on small caps
 STAKE = 100      # $ per trade for the equity curve
 

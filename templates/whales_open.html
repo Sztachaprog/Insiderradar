@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Otwarte pozycje · Wieloryby{% endblock %}
+{% block content %}
+  {% include "_tabs.html" %}
+  <p class="muted" style="margin:0 0 14px">Sygnały spot z ostatnich 90 dni, czyli tokeny, które wieloryby konsekwentnie akumulowały. Traktujemy je jak pozycję kupioną po cenie z chwili sygnału.
+    Kliknij wiersz, żeby zobaczyć, którzy wieloryby kupują i czy wciąż trzymają.</p>
+  {% set rets = rows|map(attribute='perf')|reject('none')|map(attribute='now')|reject('none')|list %}
+  <section class="stats">
+    <div class="stat card"><b>{{ rows|length }}</b><small>otwartych pozycji</small></div>
+    <div class="stat card"><b class="{{ ('up' if (rets|sum) >= 0 else 'down') if rets }}">{{ ((rets|sum) / rets|length if rets else none)|pct }}</b><small>średni wynik od sygnału</small></div>
+    <div class="stat card"><b>{{ ((rets|select('gt', 0)|list|length) / rets|length if rets else none)|pct(false) }}</b><small>na plusie</small></div>
+  </section>
+  <section class="card table-wrap">
+  {% if rows %}
+    <table>
+      <thead><tr><th>Token</th><th>Sieć</th><th>Sygnał</th><th class="num">Ocena</th><th class="num">Akumulują / wyprzedają</th>
+        <th class="num">Cena sygnału</th><th class="num">Teraz</th><th class="num">Wynik</th>{% for n, label in horizons %}<th class="num">{{ label }}</th>{% endfor %}<th>Koniec</th></tr></thead>
+      <tbody>
+      {% for t in rows %}
+        <tr onclick="location.href='{{ url_for('whale_token', token=t.token) }}'">
+          <td><div class="token">{% if t.icon %}<img src="{{ t.icon }}" alt="" loading="lazy">{% endif %}
+            <div><b class="mono">{{ t.symbol }}</b>{% if t.xtb %}<a class="xtb" href="{{ t.xtb }}" target="_blank" rel="noopener" onclick="event.stopPropagation()">XTB ↗</a>{% endif %}<span class="sub">{{ t.name }}</span></div></div></td>
+          <td><span class="chip">{{ t.chain_label }}</span></td>
+          <td class="mono" data-sort="{{ t.signal.flagged_at }}">{{ t.signal.flagged_at|local("%d.%m %H:%M") }}</td>
+          <td class="num">{{ t.signal.score }}<span class="sub">teraz {{ t.score }}</span></td>
+          <td class="num"><span class="up">{{ t.acc }}</span> / <span class="down">{{ t.dist }}</span></td>
+          <td class="num">{{ t.signal.price|usd }}</td>
+          <td class="num">{{ t.price|usd }}</td>
+          <td class="num"><b class="{{ ('up' if t.perf.now >= 0 else 'down') if t.perf and t.perf.now is not none }}">{{ (t.perf.now if t.perf else none)|pct }}</b></td>
+          {% for n, label in horizons %}{% set v = t.perf.h.get(n) if t.perf else none %}
+            <td class="num {{ ('up' if v >= 0 else 'down') if v is not none }}">{{ v|pct if v is not none else '—' }}</td>{% endfor %}
+          <td class="mono" data-sort="{{ t.ends_at }}">{{ t.ends_at|local("%d.%m") }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% else %}<div class="empty">Brak otwartych pozycji. Sygnał spot pojawia się, gdy kilka wielorybów zaczyna konsekwentnie dokupować.</div>{% endif %}
+  </section>
+{% endblock %}

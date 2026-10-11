@@ -113,9 +113,20 @@ def _cache_methods(obj, names: list[str]) -> None:
 def export(parts, base_path: str) -> int:
     store, cstore, wstore, scanner, tracker, cscanner, wscanner = parts
     _cache_methods(store, ["all", "tracked", "prices", "companies", "histories", "weights"])
-    _cache_methods(cstore, ["events", "prices", "coins", "weights", "strategies"])
+    _cache_methods(cstore, ["events", "prices", "coins", "weights", "strategies", "news"])
+    _cache_methods(wstore, ["transfers", "whales", "tokens", "token_prices", "balances", "signals", "labels"])
     original_build = whales.build
     whales.build = functools.cache(lambda s, now=None, include_treasury=False: original_build(s, now, include_treasury))
+    # The same signal list is rebuilt for hundreds of pages: compute it once per distinct filter.
+    original_rows = webapp.build_crypto_rows
+    rows_cache: dict = {}
+
+    def cached_rows(cdata, args):
+        key = tuple(sorted((k, v) for k, v in (args.items() if hasattr(args, "items") else [])))
+        if key not in rows_cache:
+            rows_cache[key] = original_rows(cdata, args)
+        return rows_cache[key]
+    webapp.build_crypto_rows = cached_rows
     try:
         flask_app = webapp.create_app(store=store, scanner=scanner, tracker=tracker, start_background=False,
                                       crypto_store=cstore, crypto_scanner=cscanner,
@@ -123,14 +134,22 @@ def export(parts, base_path: str) -> int:
         client = flask_app.test_client()
         base_url = "http://localhost" + base_path.rstrip("/")
 
-        pages = ["/", "/wyniki", "/krypto", "/krypto/wyniki", "/krypto/strategie", "/wieloryby"]
+        pages = ["/", "/wyniki", "/krypto", "/krypto/wyniki", "/krypto/strategie", "/wieloryby",
+                 "/krypto/strategie/otwarte", "/krypto/strategie/historia", "/krypto/otwarte", "/wieloryby/otwarte"]
         for code in "PS":
             rows, _ = webapp.build_rows(store.all(), {"code": code, "min": "0", "all_owners": "1", "plan": "1"},
                                         {"tracked": store.tracked(), "prices": store.prices(),
                                          "companies": store.companies()})
             pages += [f"/filing/{r['accession']}" for r in rows]
         cutoff = crypto.iso(crypto.utcnow() - timedelta(days=crypto.TRACK_DAYS))
-        pages += [f"/krypto/{e['id']}" for e in cstore.events() if e["detected_at"] >= cutoff]
+        pages += [f"/krypto/{e['id']}" for e in cstore.events()
+                  if e["detected_at"] >= cutoff and e.get("origin", "live") == "live"]
+        # every journal position (current rule versions) and the signal page its token name links to
+        versions = {k: strategy.version(p) for k, _, _, p in strategy.PRESETS if k not in strategy.REFERENCE_ONLY}
+        versions.update({f"c{s['id']}": strategy.version(s["params"]) for s in cstore.strategies()})
+        for r in strategy.Journal(webapp.DB_PATH).rows():
+            if versions.get(r["strategy"]) == r["version"]:
+                pages += [f"/krypto/pozycja/{r['strategy']}/{r['event_id']}", f"/krypto/{r['event_id']}"]
         data = whales.build(wstore, include_treasury=True)
         pages += [f"/wieloryby/token/{t['token']}" for t in data["tokens"]]
         pages += [f"/wieloryby/portfel/{w['address']}" for w in data["whales"]]
@@ -153,6 +172,7 @@ def export(parts, base_path: str) -> int:
         return failed
     finally:
         whales.build = original_build
+        webapp.build_crypto_rows = original_rows
 
 
 class Status:

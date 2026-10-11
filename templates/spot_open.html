@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Otwarte pozycje · Kryptowaluty spot{% endblock %}
+{% block content %}
+  {% include "_tabs.html" %}
+  <p class="muted" style="margin:0 0 14px">Każdy ruch wykryty przez radar w ostatnich 7 dniach traktujemy jak pozycję spot kupioną po cenie z chwili wykrycia i trzymaną do 7 dni.
+    Kliknij wiersz, żeby przejść do strony tokena z wykresem i newsami.</p>
+  {% set ups = rows|selectattr('now_ret')|selectattr('now_ret', 'gt', 0)|list %}
+  {% set rets = rows|map(attribute='now_ret')|reject('none')|list %}
+  <section class="stats">
+    <div class="stat card"><b>{{ rows|length }}</b><small>otwartych pozycji</small></div>
+    <div class="stat card"><b class="{{ ('up' if (rets|sum) >= 0 else 'down') if rets }}">{{ ((rets|sum) / rets|length if rets else none)|pct }}</b><small>średni wynik teraz</small></div>
+    <div class="stat card"><b>{{ ((ups|length) / rets|length if rets else none)|pct(false) }}</b><small>na plusie</small></div>
+  </section>
+  <section class="card table-wrap">
+  {% if rows %}
+    <table>
+      <thead><tr><th>Token</th><th>Wykryto</th><th>Ruch</th><th class="num">Ocena</th><th class="num">Cena wejścia</th><th class="num">Teraz</th>
+        <th class="num">Wynik</th><th class="num">Kapitalizacja</th><th>Koniec śledzenia</th></tr></thead>
+      <tbody>
+      {% for r in rows %}
+        <tr onclick="location.href='{{ url_for('crypto_event', event_id=r.id) }}'">
+          <td><div class="token">{% if r.image %}<img src="{{ r.image }}" alt="" loading="lazy">{% endif %}
+            <div><b class="mono">{{ r.symbol }}</b>{% if r.xtb %}<a class="xtb" href="{{ r.xtb }}" target="_blank" rel="noopener" onclick="event.stopPropagation()">XTB ↗</a>{% endif %}<span class="sub">{{ r.name }}{% if r.news %} · 📰 {{ r.news|length }}{% endif %}</span></div></div></td>
+          <td class="mono" data-sort="{{ r.detected_at }}">{{ r.detected_at|local("%d.%m %H:%M") }}</td>
+          <td style="white-space:normal">{% for l in r.trigger_labels %}<span class="chip" style="margin:1px 0">{{ l }}</span> {% endfor %}</td>
+          <td class="num"><span class="badge {{ r.signal.level }}"><i>{{ r.signal.score }}</i>{{ r.signal.label }}</span></td>
+          <td class="num">{{ r.base_price|usd }}</td>
+          <td class="num">{{ r.now_price|usd if r.now_price else '—' }}</td>
+          <td class="num"><b class="{{ ('up' if r.now_ret >= 0 else 'down') if r.now_ret is not none }}">{{ ('▲ ' if r.now_ret >= 0 else '▼ ') if r.now_ret is not none }}{{ r.now_ret|pct }}</b></td>
+          <td class="num">{{ r.mcap|money }}</td>
+          <td class="mono" data-sort="{{ r.ends_at }}">{{ r.ends_at|local("%d.%m %H:%M") }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% else %}<div class="empty">Brak ruchów z ostatnich 7 dni.</div>{% endif %}
+  </section>
+{% endblock %}

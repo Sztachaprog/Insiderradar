@@ -278,5 +278,27 @@ def test_sidebar_navigation_and_sections(client):
     html = client.get("/krypto/wyniki").get_data(as_text=True)
     for label in ("Spółki", "Insiderzy", "Wyniki spółek", "Krypto", "Kryptowaluty spot", "Strategie lev", "Wieloryby"):
         assert label in html
-    assert "Podsumowanie krypto" in html and "Strategie lev: porównanie" in html and "Wieloryby: sygnały spot" in html
+    assert "Podsumowanie krypto" in html and "Strategie lev: porównanie" not in html   # details live on their own pages
     assert 'class="on"' in html                              # current page highlighted in the menu
+
+
+def test_position_pages(client, tmp_path):
+    import app as webapp
+    import strategy
+    # journal entry for the MOON signal so the open / history / position pages have something to show
+    moon = client.get("/api/crypto?q=moon").get_json()["rows"][0]
+    j = strategy.Journal(tmp_path / "t.db")
+    key, params = next((k, dict(p)) for k, _, _, p in strategy.PRESETS if k not in strategy.REFERENCE_ONLY)
+    row = {**moon, "id": moon["id"]}
+    win = strategy.simulate(row, [(moon["detected_at"].replace("Z", "Z"), 1.0)], params, crypto.utcnow())
+    win.update(status="closed", exit=1.1, exit_at=moon["detected_at"], reason="take-profit", gross=0.1, net=0.095)
+    j.record(key, params, [win], lambda t: True)
+    for url in ("/krypto/strategie/otwarte", "/krypto/strategie/historia", "/krypto/otwarte", "/wieloryby/otwarte"):
+        r = client.get(url)
+        assert r.status_code == 200, url
+        assert "Otwarte pozycje" in r.get_data(as_text=True)
+    hist = client.get("/krypto/strategie/historia").get_data(as_text=True)
+    assert "MOON" in hist and "take-profit" in hist
+    page = client.get(f"/krypto/pozycja/{key}/{moon['id']}").get_data(as_text=True)
+    assert "Przebieg pozycji" in page and "newsy i szczegóły" in page
+    assert client.get("/krypto/pozycja/nope/1").status_code == 404

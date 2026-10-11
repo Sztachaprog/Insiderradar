@@ -11,6 +11,7 @@
 </style>
 {% endblock %}
 {% block content %}
+  {% include "_tabs.html" %}
   <p class="muted" style="margin:0 0 14px; max-width: 980px">Każdy wykryty ruch krypto jest symulowany jak transakcja dzienna.
     Kupno następuje po cenie z chwili wykrycia. Sprzedaż następuje, gdy kurs dotknie take-profit lub stop-loss albo minie maksymalny czas trzymania. Od wyniku odejmowany jest koszt transakcji.
     Wynik liczę na <b>świecach minutowych</b> (Binance albo GeckoTerminal): TP padł, jeśli najwyższa cena świecy go dotknęła, a SL, jeśli najniższa.
@@ -127,34 +128,13 @@
   </section>
 {% endif %}
 
-  <section class="card section">
-    <h2>Dziennik transakcji: {{ selected.name }}</h2>
-    <p class="note">{% if selected.from_journal %}Transakcje zapisane przez skany. Zamknięte i policzone na świecach są ostateczne.{% else %}Podgląd: ta strategia nie ma jeszcze wpisów w dzienniku, więc wynik jest symulowany teraz.{% endif %}
-      Kliknij nagłówek, żeby posortować.</p>
-  <div class="table-wrap">
-    {% if r.trades %}
-    <table>
-      <thead><tr><th>Token</th><th>Wejście</th><th class="num">Cena wejścia</th><th>Wyjście</th><th class="num">Cena wyjścia</th><th class="num">Powód</th>
-        <th class="num">Najwyżej</th><th class="num">Najniżej</th><th class="num">Wynik netto</th><th>Dane</th></tr></thead>
-      <tbody>
-      {% for t in r.trades %}{% set row = t.row %}
-        <tr onclick="location.href='{{ url_for('crypto_event', event_id=row.id) }}'">
-          <td><b class="mono">{{ row.symbol }}</b>{% if row.origin == 'backfill' %} <span class="chip" title="sygnał odtworzony z historii Binance">historia</span>{% endif %}<span class="sub">{{ row.trigger_labels|join(', ') }} · ocena {{ row.signal.score }}</span></td>
-          <td class="mono" data-sort="{{ t.entry_at }}">{{ t.entry_at|local("%d.%m %H:%M") }}</td>
-          <td class="num">{{ t.entry|usd }}</td>
-          <td class="mono" data-sort="{{ t.exit_at or '' }}">{{ t.exit_at|local("%d.%m %H:%M") if t.exit_at else '—' }}</td>
-          <td class="num">{{ t.exit|usd if t.exit else '—' }}</td>
-          <td class="num">{% if t.status == 'closed' %}{{ t.reason }}{% elif t.status == 'open' %}<span class="chip">otwarta</span>{% else %}<span class="chip">brak danych</span>{% endif %}</td>
-          <td class="num up">{{ t.peak|pct }}</td>
-          <td class="num down">{{ t.trough|pct }}</td>
-          <td class="num"><b class="{{ ('up' if t.net >= 0 else 'down') if t.net is not none }}">{{ t.net|pct }}</b></td>
-          <td>{% if t.source == 'candles' %}<span class="chip" style="background:var(--blue-soft);color:var(--blue)">świece</span>{% else %}<span class="chip" title="token bez źródła świec albo świece jeszcze się pobierają">zdjęcia cen</span>{% endif %}{% if t.final %} <span class="chip" title="zapisana na stałe">🔒</span>{% endif %}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    {% else %}<div class="empty">Żaden ruch nie pasuje do tej strategii.</div>{% endif %}
-  </div>
+  <section class="card section" style="display:flex; gap:12px; flex-wrap:wrap; align-items:center; justify-content:space-between">
+    <div><h2 style="margin-bottom:4px">Transakcje strategii</h2>
+      <p class="note" style="margin:0">Pozycje otwarte teraz i pełna historia zamkniętych transakcji są w osobnych zakładkach.</p></div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap">
+      <a class="btn-xtb alt" href="{{ url_for('strategy_open') }}">Otwarte pozycje →</a>
+      <a class="btn-xtb" href="{{ url_for('strategy_history') }}">Historia transakcji →</a>
+    </div>
   </section>
 {% endblock %}
 {% block scripts %}

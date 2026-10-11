@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}{{ t.row.symbol }} · {{ t.strategy_name }}{% endblock %}
+{% block content %}
+  {% set row = t.row %}
+  <p style="margin:0 0 12px"><a href="{{ url_for('strategy_open') if t.status == 'open' else url_for('strategy_history') }}">← wróć do {{ 'otwartych pozycji' if t.status == 'open' else 'historii transakcji' }}</a></p>
+  <section class="card section">
+    <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:flex-start">
+      <div>
+        <div class="token" style="gap:12px">{% if row.image %}<img src="{{ row.image }}" alt="" style="width:36px;height:36px">{% endif %}
+          <div><a href="{{ url_for('crypto_event', event_id=row.id) }}" style="color:inherit; text-decoration:none">
+            <h1 style="font:700 26px 'Space Grotesk',sans-serif; margin:0">{{ row.symbol }} <span style="font-size:14px" class="muted">↗ newsy i szczegóły</span></h1></a>
+            <span class="muted">{{ row.name }} · {{ t.strategy_name }}</span></div></div>
+        <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap">
+          {% if t.status == 'open' %}<span class="chip hot">otwarta</span>{% else %}<span class="chip">zamknięta: {{ t.reason }}</span>{% endif %}
+          {% if row.origin == 'backfill' %}<span class="chip">historia</span>{% endif %}
+          <span class="chip">{{ 'świece' if has_candles else 'zdjęcia cen' }}</span>
+          {% for l in row.trigger_labels %}<span class="chip">{{ l }}</span>{% endfor %}
+        </div>
+      </div>
+      {% set ret = t.net if t.status == 'closed' else t.now_ret %}
+      <div style="text-align:right"><small class="muted">{{ 'wynik netto' if t.status == 'closed' else 'wynik teraz (brutto)' }}</small>
+        <div style="font:700 32px 'JetBrains Mono',monospace" class="{{ ('up' if ret >= 0 else 'down') if ret is not none }}">{{ ret|pct }}</div>
+        <small class="muted">{% if ret is not none %}{{ "%+.2f"|format(ret * 100) }} $ na każde $100{% endif %}</small></div>
+    </div>
+    <div class="facts">
+      <div><small>Wejście</small><b>{{ t.entry|usd }}</b><span class="sub">{{ t.entry_at|local("%d.%m %H:%M") }}</span></div>
+      <div><small>Take-profit (+{{ "%g"|format(t.full.tp * 100) }}%)</small><b class="up">{{ t.tp_price|usd }}</b></div>
+      <div><small>Stop-loss (−{{ "%g"|format(t.full.sl * 100) }}%)</small><b class="down">{{ t.sl_price|usd }}</b></div>
+      <div><small>{{ 'Wyjście' if t.exit_at else 'Koniec najpóźniej' }}</small><b>{{ t.exit|usd if t.exit else (t.now_price|usd if t.now_price else '—') }}</b>
+        <span class="sub">{{ (t.exit_at or t.deadline)|local("%d.%m %H:%M") }}</span></div>
+      <div><small>Najwyżej / najniżej w trakcie</small><b><span class="up">{{ t.peak|pct }}</span> / <span class="down">{{ t.trough|pct }}</span></b></div>
+    </div>
+  </section>
+
+  <section class="card section">
+    <h2>Przebieg pozycji</h2>
+    <div class="legend">
+      <span style="--c: var(--blue)">Kurs (zamknięcie świecy)</span>
+      <span class="dash" style="--c: var(--muted)">Wejście</span>
+      <span class="dash" style="--c: var(--blue)">TP</span>
+      <span class="dash" style="--c: var(--pink)">SL</span>
+    </div>
+    {% if chart.close|length > 1 %}<div class="chart-box" style="height:380px"><canvas id="pos"></canvas></div>
+    {% else %}<p class="muted">Brak danych cenowych dla tej pozycji.</p>{% endif %}
+    <p class="note" style="margin-top:10px">Jasne pole wokół linii to zakres od najniższej do najwyższej ceny w każdej świecy. Po nim widać, czy kurs dotknął TP albo SL między pomiarami.</p>
+  </section>
+{% endblock %}
+{% block scripts %}
+{% if chart.close|length > 1 %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const c = {{ chart|tojson }}, entry = {{ t.entry|tojson }}, tp = {{ t.tp_price|tojson }}, sl = {{ t.sl_price|tojson }};
+  const entryAt = {{ t.entry_at|tojson }}, exitAt = {{ t.exit_at|tojson }};
+  const fmt = v => v >= 1 ? "$" + Number(v).toFixed(3) : "$" + Number(v).toPrecision(4);
+  const flat = v => c.close.map(() => v);
+  const mark = at => c.ts.map(ts => (at && ts >= at && (c.ts.find(x => x >= at) === ts)) ? 1 : 0);
+  const entryIdx = c.ts.findIndex(ts => ts > entryAt), exitIdx = exitAt ? c.ts.findIndex(ts => ts >= exitAt) : -1;
+  const points = c.close.map((v, i) => i === entryIdx || i === exitIdx ? 6 : 0);
+  new Chart(document.getElementById("pos"), {
+    type: "line",
+    data: { labels: c.labels, datasets: [
+      { label: "Najwyżej", data: c.high, borderWidth: 0, pointRadius: 0, fill: "+1", backgroundColor: css("--blue-soft") },
+      { label: "Najniżej", data: c.low, borderWidth: 0, pointRadius: 0, fill: false },
+      { label: "Kurs", data: c.close, borderColor: css("--blue"), borderWidth: 2, tension: .15, pointRadius: points,
+        pointBackgroundColor: c.close.map((v, i) => i === exitIdx ? css("--pink") : css("--text")), pointBorderColor: css("--panel"), pointBorderWidth: 2 },
+      { label: "Wejście", data: flat(entry), borderColor: css("--muted"), borderWidth: 1.5, borderDash: [4, 4], pointRadius: 0 },
+      { label: "TP", data: flat(tp), borderColor: css("--blue"), borderWidth: 1.5, borderDash: [6, 4], pointRadius: 0 },
+      { label: "SL", data: flat(sl), borderColor: css("--pink"), borderWidth: 1.5, borderDash: [6, 4], pointRadius: 0 },
+    ] },
+    options: { maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
+      plugins: { legend: { display: false }, tooltip: { filter: i => ["Kurs", "Najwyżej", "Najniżej"].includes(i.dataset.label),
+        callbacks: { label: i => ` ${i.dataset.label}: ${fmt(i.parsed.y)} (${((i.parsed.y / entry - 1) * 100).toFixed(1)}%)` } } },
+      scales: { x: { grid: { display: false }, ticks: { color: css("--muted"), maxTicksLimit: 8 } },
+                y: { grid: { color: css("--line") }, border: { display: false }, ticks: { color: css("--muted"), callback: v => fmt(v) } } } },
+  });
+</script>
+{% endif %}
+{% endblock %}

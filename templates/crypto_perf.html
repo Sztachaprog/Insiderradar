@@ -15,7 +15,7 @@
 
   <h2>Podsumowanie krypto</h2>
   <section class="overview">
-    <a class="card" href="{{ url_for('crypto_index') }}">
+    <a class="card" href="{{ url_for('spot_open') }}">
       <h3>Kryptowaluty spot</h3><span class="muted" style="font-size:12.5px">ruchy z radaru, wynik od chwili wykrycia</span>
       <div class="big {{ ('up' if h24.avg >= 0 else 'down') if h24 and h24.avg is not none }}">{{ (h24.avg if h24 else none)|pct }}</div>
       <span class="muted" style="font-size:12px">średnio po 24 h</span>
@@ -34,7 +34,7 @@
         <div class="row"><span>strategii na plusie</span><b>{{ closed|selectattr('result.pnl', 'gt', 0)|list|length }} / {{ closed|length }}</b></div>
       {% else %}<div class="big muted">—</div><span class="muted" style="font-size:12px">brak zamkniętych transakcji</span>{% endif %}
     </a>
-    <a class="card" href="{{ url_for('whales_index') }}">
+    <a class="card" href="{{ url_for('whales_open') }}">
       <h3>Wieloryby</h3><span class="muted" style="font-size:12.5px">sygnały spot z akumulacji dużych portfeli</span>
       <div class="big {{ ('up' if whale_summary.avg >= 0 else 'down') if whale_summary.avg is not none }}">{{ whale_summary.avg|pct }}</div>
       <span class="muted" style="font-size:12px">średnio od sygnału</span>
@@ -96,83 +96,6 @@
   {% set horizon_opts = [('now', 'Od wykrycia'), ('1', '1 h'), ('24', '24 h'), ('72', '3 dni'), ('168', '7 dni')] %}
   {% include "_calibration.html" %}
 
-  <section class="card section">
-    <h2>Strategie lev: porównanie</h2>
-    <p class="note">Wszystkie gotowe i zapisane strategie na tych samych ruchach, z kosztem 0,5% i stawką $100. Kliknij nagłówek, żeby posortować.</p>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Strategia</th><th class="num">Transakcje</th><th class="num">Otwarte</th><th class="num">Trafność</th>
-          <th class="num">Śr. wynik netto</th><th class="num">Profit factor</th><th class="num">Wynik $</th><th class="num">Max obsunięcie $</th></tr></thead>
-        <tbody>
-        {% for s in strategies %}{% set r = s.result %}
-          <tr onclick="location.href='{{ url_for('crypto_strategies', s=s.key) }}'">
-            <td><b>{{ s.name }}</b>{% if s.saved %} <span class="chip">zapisana</span>{% endif %}<span class="sub">{{ s.rules|join(' · ') }}</span></td>
-            <td class="num">{{ r.closed }}</td><td class="num">{{ r.open }}</td>
-            <td class="num">{{ r.win_rate|pct(false) }}</td>
-            <td class="num {{ ('up' if r.avg >= 0 else 'down') if r.avg is not none }}">{{ r.avg|pct }}</td>
-            <td class="num">{{ "%.2f"|format(r.profit_factor) if r.profit_factor is not none else "—" }}</td>
-            <td class="num"><b class="{{ 'up' if r.pnl >= 0 else 'down' }}">{{ "%+.2f"|format(r.pnl) }}</b></td>
-            <td class="num down">{{ "%.2f"|format(r.max_dd) }}</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </section>
-
-  <section class="card section">
-    <h2>Wieloryby: sygnały spot</h2>
-    <p class="note">Tokeny, które wieloryby konsekwentnie akumulowały (ocena 60+), z ceną z chwili sygnału i wynikiem od tamtej pory.</p>
-    <div class="table-wrap">
-    {% if wsignals %}
-      <table>
-        <thead><tr><th>Token</th><th>Sieć</th><th>Sygnał</th><th class="num">Ocena</th><th class="num">Cena sygnału</th>
-          <th class="num">Teraz</th><th class="num">Od sygnału</th>{% for n, label in whale_horizons %}<th class="num">{{ label }}</th>{% endfor %}</tr></thead>
-        <tbody>
-        {% for t in wsignals %}
-          <tr onclick="location.href='{{ url_for('whale_token', token=t.token) }}'">
-            <td><b class="mono">{{ t.symbol }}</b>{% if t.xtb %}<a class="xtb" href="{{ t.xtb }}" target="_blank" rel="noopener" onclick="event.stopPropagation()">XTB ↗</a>{% endif %}<span class="sub">{{ t.name }}</span></td>
-            <td><span class="chip">{{ t.chain_label }}</span></td>
-            <td class="mono" data-sort="{{ t.signal.flagged_at }}">{{ t.signal.flagged_at|local("%d.%m %H:%M") }}</td>
-            <td class="num">{{ t.signal.score }}</td>
-            <td class="num">{{ t.signal.price|usd }}</td>
-            <td class="num">{{ t.price|usd }}</td>
-            <td class="num"><b class="{{ ('up' if t.perf.now >= 0 else 'down') if t.perf and t.perf.now is not none }}">{{ (t.perf.now if t.perf else none)|pct }}</b></td>
-            {% for n, label in whale_horizons %}{% set v = t.perf.h.get(n) if t.perf else none %}
-              <td class="num {{ ('up' if v >= 0 else 'down') if v is not none }}">{{ v|pct if v is not none else '—' }}</td>{% endfor %}
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    {% else %}<div class="empty">Brak sygnałów spot. Pojawią się, gdy kilka wielorybów zacznie konsekwentnie dokupować.</div>{% endif %}
-    </div>
-  </section>
-
-  <h2>Kryptowaluty spot: każdy ruch</h2>
-  <section class="card table-wrap">
-    {% if perf.rows %}
-    <table>
-      <thead><tr><th>Token</th><th>Potencjał</th><th>Wykryto</th><th class="num">Cena</th><th class="num">Teraz</th>
-        <th class="num">Od wykrycia</th>{% for n, label in perf.horizons %}<th class="num">{{ label }}</th>{% endfor %}<th class="num">vs BTC</th></tr></thead>
-      <tbody>
-      {% for r in perf.rows %}
-        <tr onclick="location.href='{{ url_for('crypto_event', event_id=r.id) }}'">
-          <td><b class="mono">{{ r.symbol }}</b><span class="sub">{{ r.trigger_labels|join(', ') }}</span></td>
-          <td><span class="badge {{ r.signal.level }}"><i>{{ r.signal.score }}</i>{{ r.signal.label }}</span></td>
-          <td class="mono" data-sort="{{ r.detected_at }}">{{ r.detected_at|local("%d.%m %H:%M") }}</td>
-          <td class="num">{{ r.base_price|usd }}</td><td class="num">{{ r.price_now|usd }}</td>
-          <td class="num"><b class="{{ 'up' if r.perf.now >= 0 else 'down' }}">{{ '▲' if r.perf.now >= 0 else '▼' }} {{ r.perf.now|pct }}</b></td>
-          {% for n, label in perf.horizons %}{% set h = r.perf.h.get(n) %}
-            <td class="num {{ ('up' if h.ret >= 0 else 'down') if h }}">{{ h.ret|pct if h else '—' }}</td>{% endfor %}
-          <td class="num {{ ('up' if r.perf.alpha_now >= 0 else 'down') if r.perf.alpha_now is not none }}">{{ r.perf.alpha_now|pct }}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-      <div class="empty">Nic jeszcze nie jest śledzone. Ruchy pojawią się po pierwszym skanie CoinGecko.</div>
-    {% endif %}
-  </section>
 {% endblock %}
 {% block scripts %}
 {% if perf.rows %}

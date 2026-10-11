@@ -709,7 +709,9 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
     @app.get("/krypto")
     def crypto_index():
         rows, summary = build_crypto_rows(crypto_data(), request.args)
-        return render_template("crypto.html", rows=rows, summary=summary, **common(page="crypto"))
+        tabs = [("radar", "Radar", url_for("crypto_index")), ("open", "Otwarte pozycje", url_for("spot_open"))]
+        return render_template("crypto.html", rows=rows, summary=summary, tabs=tabs, active="radar",
+                               **common(page="crypto"))
 
     def strategy_catalog(rows, prices, now, fee=strategy.FEE, stake=strategy.STAKE, custom=None) -> list[dict]:
         """Presets + saved strategies (+ an unsaved editor preview).
@@ -772,7 +774,7 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         start = crypto.iso(crypto.parse_iso(row["detected_at"]) - timedelta(days=2))
         bars = kstore.paths([event_id]).get(event_id)
         if bars:  # chart from candles (closes), thinned to keep the page light
-            step = max(1, len(bars) // 600)
+            step = max(1, len(bars) // 300)
             points = [(b[0], b[4]) for b in bars[::step]]
         else:
             points = [p for p in cd["prices"].get(row["coin_id"], []) if p[0] >= start]
@@ -796,10 +798,104 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         fresh = now - timedelta(minutes=60)
         candidates = [t for t in selected["result"]["trades"]
                       if t["status"] == "open" and crypto.parse_iso(t["entry_at"]) >= fresh]
-        return render_template("crypto_strategies.html", catalog=catalog, selected=selected,
+        tabs, active = strategy_tabs("strategies")
+        return render_template("crypto_strategies.html", catalog=catalog, selected=selected, tabs=tabs, active=active,
                                candidates=candidates, fee=fee, stake=stake,
                                form=strategy.form_values(selected["params"]),
                                trigger_labels=crypto.TRIGGER_LABELS, **common(page="strategies"))
+
+    # ----- positions: open trades, trade history, one position's chart -----
+
+    def journal_positions(cd) -> tuple[list[dict], dict]:
+        """Every trade of every strategy (current rule versions) from the journal, newest first."""
+        rows, _ = build_crypto_rows(cd, {"history": "1"})
+        events = {r["id"]: r for r in rows}
+        catalog = [(k, n, p) for k, n, _, p in strategy.PRESETS if k not in strategy.REFERENCE_ONLY] + \
+                  [(f"c{x['id']}", x["name"], x["params"]) for x in cstore.strategies()]
+        out = []
+        for key, name, params in catalog:
+            full = {**strategy.DEFAULTS, **params}
+            for t in strategy.journal_trades(journal.rows(key, strategy.version(params)), events):
+                t.update(strategy_key=key, strategy_name=name, full=full,
+                         tp_price=t["entry"] * (1 + full["tp"]), sl_price=t["entry"] * (1 - full["sl"]),
+                         deadline=crypto.iso(crypto.parse_iso(t["entry_at"]) + timedelta(hours=full["hold_h"])))
+                out.append(t)
+        out.sort(key=lambda t: t["entry_at"], reverse=True)
+        return out, events
+
+    def last_prices(event_ids: list[int], cd) -> dict[int, tuple[str, float]]:
+        """Latest known price per signal: last candle close, else our latest snapshot."""
+        out = {}
+        for eid, bars in kstore.paths(event_ids).items():
+            if bars:
+                out[eid] = (bars[-1][0], bars[-1][4])
+        return out
+
+    def strategy_tabs(active):
+        return [("strategies", "Strategie", url_for("crypto_strategies")),
+                ("open", "Otwarte pozycje", url_for("strategy_open")),
+                ("history", "Historia transakcji", url_for("strategy_history"))], active
+
+    @app.get("/krypto/strategie/otwarte")
+    def strategy_open():
+        cd = crypto_data()
+        positions, events = journal_positions(cd)
+        open_ = [t for t in positions if t["status"] == "open"]
+        now_px = last_prices(list({t["event_id"] for t in open_}), cd)
+        for t in open_:
+            ts, px = now_px.get(t["event_id"], (None, events[t["event_id"]].get("price_now")))
+            t["now_price"], t["now_ts"] = px, ts
+            t["now_ret"] = px / t["entry"] - 1 if px else None
+        tabs, active = strategy_tabs("open")
+        return render_template("positions.html", mode="open", positions=open_, tabs=tabs, active=active,
+                               heading="Otwarte pozycje", **common(page="strategies"))
+
+    @app.get("/krypto/strategie/historia")
+    def strategy_history():
+        cd = crypto_data()
+        positions, _ = journal_positions(cd)
+        closed = sorted((t for t in positions if t["status"] == "closed"), key=lambda t: t["exit_at"], reverse=True)
+        names = sorted({t["strategy_name"] for t in closed})
+        tabs, active = strategy_tabs("history")
+        return render_template("positions.html", mode="history", positions=closed, strategy_names=names, tabs=tabs,
+                               active=active, heading="Historia transakcji", **common(page="strategies"))
+
+    @app.get("/krypto/pozycja/<key>/<int:event_id>")
+    def position(key, event_id):
+        cd = crypto_data()
+        positions, events = journal_positions(cd)
+        t = next((x for x in positions if x["strategy_key"] == key and x["event_id"] == event_id), None)
+        if t is None:
+            abort(404)
+        bars = kstore.paths([event_id]).get(event_id, [])
+        if not bars:  # no candles: fall back to price snapshots as flat bars
+            bars = [(ts, p, p, p, p) for ts, p in cd["prices"].get(t["row"]["coin_id"], [])]
+        start = crypto.iso(crypto.parse_iso(t["entry_at"]) - timedelta(hours=2))
+        stop_dt = crypto.parse_iso(t["exit_at"]) + timedelta(hours=3) if t["exit_at"] else crypto.utcnow()
+        view = [b for b in bars if start <= b[0] <= crypto.iso(stop_dt)]
+        step = max(1, len(view) // 400)
+        view = view[::step]
+        if not t["exit_at"] and bars:
+            t["now_price"], t["now_ret"] = bars[-1][4], bars[-1][4] / t["entry"] - 1
+        chart = {"labels": [crypto.local(b[0], "%d.%m %H:%M") for b in view], "ts": [b[0] for b in view],
+                 "close": [b[4] for b in view], "high": [b[2] for b in view], "low": [b[3] for b in view]}
+        return render_template("position.html", t=t, chart=chart, has_candles=bool(kstore.paths([event_id])),
+                               **common(page="strategies"))
+
+    @app.get("/krypto/otwarte")
+    def spot_open():
+        cd = crypto_data()
+        rows, _ = build_crypto_rows(cd, {})
+        now = crypto.utcnow()
+        live = [r for r in rows if crypto.parse_iso(r["detected_at"]) >= now - timedelta(days=crypto.HORIZONS[-1][0] / 24)]
+        now_px = last_prices([r["id"] for r in live], cd)
+        for r in live:
+            ts, px = now_px.get(r["id"], (None, r["price_now"]))
+            r["now_price"] = px
+            r["now_ret"] = px / r["base_price"] - 1 if px and r["base_price"] else None
+            r["ends_at"] = crypto.iso(crypto.parse_iso(r["detected_at"]) + timedelta(hours=crypto.HORIZONS[-1][0]))
+        tabs = [("radar", "Radar", url_for("crypto_index")), ("open", "Otwarte pozycje", url_for("spot_open"))]
+        return render_template("spot_open.html", rows=live, tabs=tabs, active="open", **common(page="crypto"))
 
     @app.post("/krypto/strategie/zapisz")
     def crypto_strategy_save():
@@ -870,8 +966,23 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         tone = request.args.get("tone", "")
         if tone:
             big = [b for b in big if b["tone"] == tone]
-        return render_template("whales.html", data=data, big=big[:100], min_usd=min_usd,
+        tabs = [("overview", "Przegląd", url_for("whales_index")), ("open", "Otwarte pozycje", url_for("whales_open"))]
+        return render_template("whales.html", data=data, big=big[:100], min_usd=min_usd, tabs=tabs, active="overview",
                                tokens=wstore.tokens(), **common(page="whales"))
+
+    @app.get("/wieloryby/otwarte")
+    def whales_open():
+        data = whale_xtb(whales.build(wstore))
+        now = crypto.utcnow()
+        horizon = timedelta(days=whales.HORIZONS[-1][0])
+        open_ = sorted((t for t in data["tokens"] if t.get("signal")
+                        and crypto.parse_iso(t["signal"]["flagged_at"]) >= now - horizon),
+                       key=lambda t: t["signal"]["flagged_at"], reverse=True)
+        for t in open_:
+            t["ends_at"] = crypto.iso(crypto.parse_iso(t["signal"]["flagged_at"]) + horizon)
+        tabs = [("overview", "Przegląd", url_for("whales_index")), ("open", "Otwarte pozycje", url_for("whales_open"))]
+        return render_template("whales_open.html", rows=open_, tabs=tabs, active="open", horizons=whales.HORIZONS,
+                               **common(page="whales"))
 
     @app.get("/wieloryby/token/<token>")
     def whale_token(token):

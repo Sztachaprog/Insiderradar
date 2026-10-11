@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Wieloryby · Insider Radar{% endblock %}
 {% block content %}
+  {% include "_tabs.html" %}
   {% set d = data %}
   <p class="muted" style="margin:0 0 14px; max-width: 1000px">Baza dużych portfeli na Ethereum: posiadacze co najmniej $1 mln w jednym ze ~140 największych tokenów.
     Giełdy, pule DEX, mosty i adresy spalania są odfiltrowane, a multisigi Safe zostają, bo używają ich fundusze.

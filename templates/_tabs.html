@@ -1,0 +1,4 @@
+{# Page-level tabs (separate pages, so they also work on the static site). Needs: tabs [(key, label, url)], active #}
+<nav class="pagetabs">
+  {% for key, label, url in tabs %}<a href="{{ url }}" class="{{ 'on' if key == active }}">{{ label }}</a>{% endfor %}
+</nav>
