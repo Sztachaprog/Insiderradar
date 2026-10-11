@@ -13,8 +13,9 @@
 {% block content %}
   <p class="muted" style="margin:0 0 14px; max-width: 980px">Każdy wykryty ruch krypto jest symulowany jak transakcja dzienna.
     Kupno następuje po cenie z chwili wykrycia. Sprzedaż następuje, gdy kurs dotknie take-profit lub stop-loss albo minie maksymalny czas trzymania. Od wyniku odejmowany jest koszt transakcji.
-    Strategie testują się na wszystkich zebranych danych, także tych sprzed ich zapisania.
-    Ceny są sprawdzane co skan (~15 min), więc krótkie szpilki między pomiarami są niewidoczne. TP liczę po cenie zlecenia, a SL po faktycznej cenie, czyli ostrożnie.</p>
+    Wynik liczę na <b>świecach minutowych</b> (Binance albo GeckoTerminal): TP padł, jeśli najwyższa cena świecy go dotknęła, a SL, jeśli najniższa.
+    Gdy w jednej świecy mieszczą się oba, liczę SL (ostrożnie). Dla tokenów bez źródła świec zostają zdjęcia cen co skan.
+    Każda transakcja trafia do <b>dziennika</b>. Gdy jest zamknięta i policzona na świecach, już się nie zmienia, nawet po zmianie reguł.</p>
 
 {% if not static %}
   <form class="filters card" method="get" style="grid-template-columns: repeat(auto-fit, minmax(160px, 220px))">
@@ -126,11 +127,15 @@
   </section>
 {% endif %}
 
-  <section class="card table-wrap">
+  <section class="card section">
+    <h2>Dziennik transakcji: {{ selected.name }}</h2>
+    <p class="note">{% if selected.from_journal %}Transakcje zapisane przez skany. Zamknięte i policzone na świecach są ostateczne.{% else %}Podgląd: ta strategia nie ma jeszcze wpisów w dzienniku, więc wynik jest symulowany teraz.{% endif %}
+      Kliknij nagłówek, żeby posortować.</p>
+  <div class="table-wrap">
     {% if r.trades %}
     <table>
-      <thead><tr><th>Token</th><th>Wejście</th><th class="num">Cena</th><th>Wyjście</th><th class="num">Powód</th>
-        <th class="num">Najwyżej</th><th class="num">Najniżej</th><th class="num">Wynik netto</th></tr></thead>
+      <thead><tr><th>Token</th><th>Wejście</th><th class="num">Cena wejścia</th><th>Wyjście</th><th class="num">Cena wyjścia</th><th class="num">Powód</th>
+        <th class="num">Najwyżej</th><th class="num">Najniżej</th><th class="num">Wynik netto</th><th>Dane</th></tr></thead>
       <tbody>
       {% for t in r.trades %}{% set row = t.row %}
         <tr onclick="location.href='{{ url_for('crypto_event', event_id=row.id) }}'">
@@ -138,15 +143,18 @@
           <td class="mono" data-sort="{{ t.entry_at }}">{{ t.entry_at|local("%d.%m %H:%M") }}</td>
           <td class="num">{{ t.entry|usd }}</td>
           <td class="mono" data-sort="{{ t.exit_at or '' }}">{{ t.exit_at|local("%d.%m %H:%M") if t.exit_at else '—' }}</td>
+          <td class="num">{{ t.exit|usd if t.exit else '—' }}</td>
           <td class="num">{% if t.status == 'closed' %}{{ t.reason }}{% elif t.status == 'open' %}<span class="chip">otwarta</span>{% else %}<span class="chip">brak danych</span>{% endif %}</td>
           <td class="num up">{{ t.peak|pct }}</td>
           <td class="num down">{{ t.trough|pct }}</td>
           <td class="num"><b class="{{ ('up' if t.net >= 0 else 'down') if t.net is not none }}">{{ t.net|pct }}</b></td>
+          <td>{% if t.source == 'candles' %}<span class="chip" style="background:var(--blue-soft);color:var(--blue)">świece</span>{% else %}<span class="chip" title="token bez źródła świec albo świece jeszcze się pobierają">zdjęcia cen</span>{% endif %}{% if t.final %} <span class="chip" title="zapisana na stałe">🔒</span>{% endif %}</td>
         </tr>
       {% endfor %}
       </tbody>
     </table>
     {% else %}<div class="empty">Żaden ruch nie pasuje do tej strategii.</div>{% endif %}
+  </div>
   </section>
 {% endblock %}
 {% block scripts %}

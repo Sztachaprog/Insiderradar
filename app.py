@@ -24,6 +24,7 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, redirect, render_template, request, url_for
 
 import calibration
+import candles
 import crypto
 import form4_scanner as fs
 import history
@@ -705,8 +706,20 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         rows, summary = build_crypto_rows(crypto_data(), request.args)
         return render_template("crypto.html", rows=rows, summary=summary, **common(page="crypto"))
 
+    kstore = candles.CandleStore(store.path)
+    journal = strategy.Journal(store.path)
+
     def strategy_catalog(rows, prices, now, fee=strategy.FEE, stake=strategy.STAKE, custom=None) -> list[dict]:
-        """Presets + saved strategies (+ an unsaved editor preview), each backtested on the stored moves."""
+        """Presets + saved strategies (+ an unsaved editor preview).
+        Results come from the trade journal written by the scans; a strategy without journal
+        entries (or a different fee) is simulated on the stored candles instead."""
+        events = {r["id"]: r for r in rows}
+        loaded = {}
+
+        def paths():
+            if "p" not in loaded:
+                loaded["p"] = kstore.paths()
+            return loaded["p"]
         catalog = [{"key": k, "name": n, "desc": d, "params": p, "saved": False} for k, n, d, p in strategy.PRESETS]
         catalog += [{"key": f"c{s['id']}", "id": s["id"], "name": s["name"], "desc": "Twoja strategia",
                      "params": s["params"], "saved": True} for s in cstore.strategies()]
@@ -714,7 +727,13 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
             catalog.append({"key": "custom", "name": "Nowa (niezapisana)", "desc": "Podgląd z edytora",
                             "params": custom, "saved": False})
         for s in catalog:
-            s["result"] = strategy.backtest(rows, prices, s["params"], now, fee, stake)
+            jrows = journal.rows(s["key"], strategy.version(s["params"])) \
+                if s["key"] != "custom" and abs(fee - strategy.FEE) < 1e-9 else []
+            s["from_journal"] = bool(jrows)
+            if jrows:
+                s["result"] = strategy.summarize(strategy.journal_trades(jrows, events), stake)
+            else:
+                s["result"] = strategy.backtest(rows, prices, s["params"], now, fee, stake, paths())
             s["rules"] = strategy.describe(s["params"])
             s["full"] = {**strategy.DEFAULTS, **s["params"]}
         return catalog

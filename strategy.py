@@ -12,6 +12,9 @@ order), SL fills at the observed price (a stop can slip), which keeps results co
 
 from __future__ import annotations
 
+import hashlib
+import json
+import sqlite3
 from datetime import timedelta
 
 import crypto
@@ -137,17 +140,29 @@ def matches(row: dict, params: dict) -> bool:
     return True
 
 
-def simulate(row: dict, points: list[tuple[str, float]], params: dict, now, fee: float = FEE) -> dict:
+def _bars(points: list[tuple]):
+    """Candles are (ts, open, high, low, close); price snapshots (ts, price) become flat bars."""
+    for p in points:
+        yield (p[0], p[1], p[1], p[1], p[1], False) if len(p) == 2 else (*p[:5], True)
+
+
+def simulate(row: dict, points: list[tuple], params: dict, now, fee: float = FEE) -> dict:
+    """Buy at the price recorded at detection, then walk the price path:
+    take-profit if a bar's high reaches it, stop-loss if a bar's low reaches it (both in one
+    bar -> stop-loss first, the cautious reading), otherwise sell when the hold time ends.
+    A bar that opens beyond a level (a gap) fills at its open, like a real order would."""
     p = {**DEFAULTS, **params}
     t0 = crypto.parse_iso(row["detected_at"])
     deadline = t0 + timedelta(hours=p["hold_h"])
     base = row["base_price"]
+    tp_level, sl_level = base * (1 + p["tp"]), base * (1 - p["sl"])
     trade = {"row": row, "entry": base, "entry_at": row["detected_at"], "exit": None, "exit_at": None,
-             "reason": None, "gross": None, "net": None, "status": "open", "peak": 0.0, "trough": 0.0}
+             "reason": None, "gross": None, "net": None, "status": "open", "peak": 0.0, "trough": 0.0,
+             "source": "candles" if points and len(points[0]) > 2 else "snapshots"}
     last = None
 
-    def time_exit(after: tuple[str, float] | None):
-        # Sell at the deadline: use the snapshot closest to it, if one is within 2 h.
+    def time_exit(after: tuple | None):
+        # Sell at the deadline: use the bar closest to it, if one is within 2 h.
         near = timedelta(hours=2)
         if last and crypto.parse_iso(last[0]) >= deadline - near:
             return _close(trade, last[1], last[0], "czas", fee)
@@ -156,18 +171,18 @@ def simulate(row: dict, points: list[tuple[str, float]], params: dict, now, fee:
         trade["status"] = "no_data"
         return trade
 
-    for ts, price in points:
+    for ts, o, h, low, c, is_candle in _bars(points):
         if ts <= row["detected_at"]:
             continue
         if crypto.parse_iso(ts) > deadline:
-            return time_exit((ts, price))
-        r = price / base - 1
-        trade["peak"], trade["trough"] = max(trade["peak"], r), min(trade["trough"], r)
-        if r >= p["tp"]:
-            return _close(trade, base * (1 + p["tp"]), ts, "take-profit", fee)
-        if r <= -p["sl"]:
-            return _close(trade, price, ts, "stop-loss", fee)
-        last = (ts, price)
+            return time_exit((ts, o))
+        trade["peak"] = max(trade["peak"], h / base - 1)
+        trade["trough"] = min(trade["trough"], low / base - 1)
+        if low <= sl_level:
+            return _close(trade, min(o, sl_level) if is_candle else low, ts, "stop-loss", fee)
+        if h >= tp_level:
+            return _close(trade, max(o, tp_level) if is_candle else tp_level, ts, "take-profit", fee)
+        last = (ts, c)
     if now >= deadline:
         return time_exit(None)
     if last:  # still running: mark to market
@@ -183,8 +198,16 @@ def _close(trade: dict, price: float, ts: str, reason: str, fee: float) -> dict:
     return trade
 
 
-def backtest(rows: list[dict], prices: dict, params: dict, now, fee: float = FEE, stake: float = STAKE) -> dict:
-    trades = [simulate(r, prices.get(r["coin_id"], []), params, now, fee) for r in rows if matches(r, params)]
+def backtest(rows: list[dict], prices: dict, params: dict, now, fee: float = FEE, stake: float = STAKE,
+             paths: dict | None = None) -> dict:
+    """paths: signal id -> candles (preferred); signals without candles fall back to price snapshots."""
+    paths = paths or {}
+    trades = [simulate(r, paths.get(r["id"]) or prices.get(r["coin_id"], []), params, now, fee)
+              for r in rows if matches(r, params)]
+    return summarize(trades, stake)
+
+
+def summarize(trades: list[dict], stake: float = STAKE) -> dict:
     closed = sorted([t for t in trades if t["status"] == "closed"], key=lambda t: t["exit_at"])
     open_ = [t for t in trades if t["status"] == "open"]
     nets = [t["net"] for t in closed]
@@ -209,3 +232,55 @@ def backtest(rows: list[dict], prices: dict, params: dict, now, fee: float = FEE
         "tp_hits": sum(t["reason"] == "take-profit" for t in closed),
         "sl_hits": sum(t["reason"] == "stop-loss" for t in closed),
     }
+
+
+# ---------- Trade journal ----------
+# Every simulated trade is written down. Once a trade is final it never changes, even if the
+# strategy's rules are edited later (new rules = new version = a separate journal).
+
+def version(params: dict) -> str:
+    return hashlib.sha1(json.dumps({**DEFAULTS, **params}, sort_keys=True).encode()).hexdigest()[:8]
+
+
+class Journal:
+    COLUMNS = ("strategy", "version", "event_id", "entry_at", "entry", "exit_at", "exit", "reason", "gross",
+               "net", "peak", "trough", "status", "source", "final", "updated_at")
+
+    def __init__(self, path):
+        self.path = str(path)
+        with sqlite3.connect(self.path) as c:
+            c.execute("""CREATE TABLE IF NOT EXISTS sim_trades (
+                strategy TEXT NOT NULL, version TEXT NOT NULL, event_id INTEGER NOT NULL,
+                entry_at TEXT, entry REAL, exit_at TEXT, exit REAL, reason TEXT, gross REAL, net REAL,
+                peak REAL, trough REAL, status TEXT, source TEXT, final INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT, PRIMARY KEY (strategy, version, event_id))""")
+
+    def rows(self, strategy: str | None = None, ver: str | None = None) -> list[dict]:
+        sql, args = "SELECT * FROM sim_trades", []
+        if strategy:
+            sql += " WHERE strategy = ? AND version = ?"
+            args = [strategy, ver]
+        with sqlite3.connect(self.path) as c:
+            c.row_factory = sqlite3.Row
+            return [dict(r) for r in c.execute(sql, args)]
+
+    def record(self, strategy: str, params: dict, trades: list[dict], is_final) -> int:
+        """Upsert trades that are not final yet; is_final(trade) decides when a trade freezes."""
+        ver = version(params)
+        frozen = {r["event_id"] for r in self.rows(strategy, ver) if r["final"]}
+        now = crypto.iso(crypto.utcnow())
+        rows = [(strategy, ver, t["row"]["id"], t["entry_at"], t["entry"], t["exit_at"], t["exit"], t["reason"],
+                 t["gross"], t["net"], t["peak"], t["trough"], t["status"], t["source"], int(is_final(t)), now)
+                for t in trades if t["row"]["id"] not in frozen]
+        with sqlite3.connect(self.path) as c:
+            c.executemany(f"INSERT OR REPLACE INTO sim_trades VALUES ({', '.join('?' * len(self.COLUMNS))})", rows)
+        return len(rows)
+
+
+def journal_trades(rows: list[dict], events: dict[int, dict]) -> list[dict]:
+    """Journal rows back into the trade dicts the pages and summarize() use."""
+    out = []
+    for r in rows:
+        if r["event_id"] in events:
+            out.append({**r, "row": events[r["event_id"]]})
+    return out

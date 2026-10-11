@@ -59,7 +59,12 @@ jobs:
       - name: Pobierz bazę z gałęzi data
         run: |
           if git fetch --depth=1 origin data 2>/dev/null; then
-            git show origin/data:form4.db > form4.db
+            # The database is stored xz-compressed (~6x smaller); older runs stored it plain.
+            if git show origin/data:form4.db.xz > /tmp/form4.db.xz 2>/dev/null; then
+              xz -dc /tmp/form4.db.xz > form4.db
+            else
+              git show origin/data:form4.db > form4.db
+            fi
             # Only keep the status file if it exists on the branch (a redirect alone would leave an empty file).
             if git show origin/data:scan_status.json > /tmp/status.json 2>/dev/null; then mv /tmp/status.json scan_status.json; fi
             echo "Baza: $(du -h form4.db | cut -f1)"
@@ -76,7 +81,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           [ -f form4.db ] || exit 0
-          mkdir -p /tmp/data && cp form4.db /tmp/data/ && cp scan_status.json /tmp/data/ 2>/dev/null || true
+          mkdir -p /tmp/data && xz -6 -T0 -c form4.db > /tmp/data/form4.db.xz
+          cp scan_status.json /tmp/data/ 2>/dev/null || true
+          echo "Baza: $(du -h form4.db | cut -f1), skompresowana: $(du -h /tmp/data/form4.db.xz | cut -f1)"
           cd /tmp/data
           git init -q -b data
           git config user.name "github-actions[bot]"

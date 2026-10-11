@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import app as webapp
+import candles
 import crypto
 import form4_scanner as fs
 import market
@@ -63,15 +64,17 @@ def scan(only: set[str], force_whales: bool):
             log(f"  nowe zgłoszenia: {scanner.last_new}, błąd: {scanner.last_error}, ceny: {tracker.last_error}")
         else:
             log("insiderzy: pominięte, brak sekretu SEC_USER_AGENT")
+    candle_status = Status()
     if "crypto" in only:
         timed("krypto", cscanner.run_once)
         log(f"  nowe ruchy: {cscanner.last_new}, błąd: {cscanner.last_error}")
+        timed("świece i dziennik strategii", lambda: candles_and_journal(store, cstore, candle_status))
     # Whale holders change slowly and the scan is the heaviest; every ~30 min is plenty.
     if "whales" in only and (force_whales or datetime.now(timezone.utc).minute % WHALES_EVERY_MIN < 10):
         timed("wieloryby", wscanner.run_once)
         log(f"  nowe portfele: {wscanner.last_new}, błąd: {wscanner.last_error}")
 
-    objs = {"stocks": scanner, "tracker": tracker, "crypto": cscanner, "whales": wscanner}
+    objs = {"stocks": scanner, "tracker": tracker, "crypto": cscanner, "whales": wscanner, "candles": candle_status}
     fields = ("last_run", "last_new", "last_error")
     if only:
         old = read_status()
@@ -147,6 +150,55 @@ def export(parts, base_path: str) -> int:
         return failed
     finally:
         whales.build = original_build
+
+
+class Status:
+    """Scanner-like status holder for steps that are not scanner objects."""
+    last_run = last_new = last_error = None
+
+
+JOURNAL_DAYS = 9   # signals younger than this can still get candles / change their trades
+
+
+def candles_and_journal(store, cstore, status: Status, now=None) -> None:
+    """1. Append new candles for live signals. 2. Re-simulate every strategy on the signals that are
+    still open and write the trades to the journal (final trades are never rewritten)."""
+    now = now or crypto.utcnow()
+    kstore = candles.CandleStore(webapp.DB_PATH)
+    try:
+        latest = {cid: pts[-1][1] for cid, pts in cstore.prices().items() if pts}
+        stats = candles.update(candles.CandleClient(), kstore, cstore.events(), now, latest)
+        log(f"  świece: +{stats['candles']}, źródła binance/geckoterminal/brak: {stats.get('binance', 0)}/"
+            f"{stats.get('geckoterminal', 0)}/{stats.get('none', 0)}, odłożone {stats['deferred']}, błędy {stats['errors']}")
+        status.last_new, status.last_error = stats["candles"], (f"{stats['errors']} błędów pobierania"
+                                                               if stats["errors"] else None)
+    except Exception as exc:  # candles must never break the scan
+        status.last_error = safety.safe_error(exc)
+        log(f"  świece: błąd {status.last_error}")
+    status.last_run = datetime.now().strftime("%H:%M:%S")
+
+    cdata = {"events": cstore.events(), "prices": cstore.prices(), "coins": cstore.coins(),
+             "weights": cstore.weights(), "xtb_crypto": set(), "news": cstore.news()}
+    rows, _ = webapp.build_crypto_rows(cdata, {})
+    recent = [r for r in rows if crypto.parse_iso(r["detected_at"]) >= now - timedelta(days=JOURNAL_DAYS)]
+    paths = kstore.paths([r["id"] for r in recent])
+    sources = kstore.sources()
+
+    def is_final(t: dict) -> bool:
+        if t["status"] == "open":
+            return False
+        if now - crypto.parse_iso(t["entry_at"]) > timedelta(days=JOURNAL_DAYS - 1):
+            return True                                   # window over: whatever we have is the answer
+        if t["status"] == "no_data":
+            return False
+        no_candles = sources.get(t["row"]["id"], {}).get("source") == "none"
+        return t["source"] == "candles" or no_candles     # snapshot-based results wait for candles
+
+    journal = strategy.Journal(webapp.DB_PATH)
+    catalog = [(k, p) for k, _, _, p in strategy.PRESETS] + [(f"c{s['id']}", s["params"]) for s in cstore.strategies()]
+    written = sum(journal.record(key, params, strategy.backtest(recent, cdata["prices"], params, now, paths=paths)["trades"],
+                                 is_final) for key, params in catalog)
+    log(f"  dziennik strategii: zapisano/zaktualizowano {written} transakcji")
 
 
 def site_url() -> str:
