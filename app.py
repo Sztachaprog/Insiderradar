@@ -512,7 +512,10 @@ def build_crypto_rows(cdata: dict, args) -> tuple[list[dict], dict]:
     query = (args.get("q") or "").strip().lower()
 
     rows = []
+    with_history = args.get("history") == "1"
     for e in cdata["events"]:
+        if e.get("origin", "live") != "live" and not with_history:
+            continue  # replayed history is for strategy tests, not the live radar
         m = e["metrics"]
         mcap = m.get("market_cap") or 0
         if trig and trig not in e["triggers"]:
@@ -607,6 +610,8 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
     app.config["BUILD_ID"] = crypto.iso(crypto.utcnow())  # static export: pages poll version.json for a newer one
     store = store or Store(DB_PATH)
     cstore = crypto_store or crypto.CryptoStore(store.path)
+    kstore = candles.CandleStore(store.path)
+    journal = strategy.Journal(store.path)
     if scanner is None:
         ua = os.environ.get("SEC_USER_AGENT") or ("viewer only@example.com" if not start_background else None)
         if not ua:
@@ -706,9 +711,6 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         rows, summary = build_crypto_rows(crypto_data(), request.args)
         return render_template("crypto.html", rows=rows, summary=summary, **common(page="crypto"))
 
-    kstore = candles.CandleStore(store.path)
-    journal = strategy.Journal(store.path)
-
     def strategy_catalog(rows, prices, now, fee=strategy.FEE, stake=strategy.STAKE, custom=None) -> list[dict]:
         """Presets + saved strategies (+ an unsaved editor preview).
         Results come from the trade journal written by the scans; a strategy without journal
@@ -734,6 +736,8 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
                 s["result"] = strategy.summarize(strategy.journal_trades(jrows, events), stake)
             else:
                 s["result"] = strategy.backtest(rows, prices, s["params"], now, fee, stake, paths())
+            closed = [t for t in s["result"]["trades"] if t["status"] == "closed"]
+            s["hist_closed"] = sum(t["row"].get("origin") == "backfill" for t in closed)
             s["rules"] = strategy.describe(s["params"])
             s["full"] = {**strategy.DEFAULTS, **s["params"]}
         return catalog
@@ -744,7 +748,7 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         rows, summary = build_crypto_rows(cd, request.args)
         perf = crypto_performance_view(rows, cd["weights"], request.args.get("h", "24"))
         # Summary of every crypto section: spot radar (above), leveraged strategies, whale spot signals.
-        all_rows, _ = build_crypto_rows(cd, {})
+        all_rows, _ = build_crypto_rows(cd, {"history": "1"})
         strategies = strategy_catalog(all_rows, cd["prices"], crypto.utcnow())
         ranked = sorted((s for s in strategies if s["result"]["closed"]), key=lambda s: -s["result"]["pnl"])
         wdata = whale_xtb(whales.build(wstore))
@@ -761,12 +765,17 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
     @app.get("/krypto/<int:event_id>")
     def crypto_event(event_id):
         cd = crypto_data()
-        rows, _ = build_crypto_rows(cd, {})
+        rows, _ = build_crypto_rows(cd, {"history": "1"})
         row = next((r for r in rows if r["id"] == event_id), None)
         if row is None:
             abort(404)
         start = crypto.iso(crypto.parse_iso(row["detected_at"]) - timedelta(days=2))
-        points = [p for p in cd["prices"].get(row["coin_id"], []) if p[0] >= start]
+        bars = kstore.paths([event_id]).get(event_id)
+        if bars:  # chart from candles (closes), thinned to keep the page light
+            step = max(1, len(bars) // 600)
+            points = [(b[0], b[4]) for b in bars[::step]]
+        else:
+            points = [p for p in cd["prices"].get(row["coin_id"], []) if p[0] >= start]
         others = [r for r in rows if r["coin_id"] == row["coin_id"] and r["id"] != event_id]
         labels = [crypto.local(ts, "%d.%m %H:%M") for ts, _ in points]
         return render_template("crypto_coin.html", r=row, points=points, labels=labels, others=others,
@@ -775,7 +784,7 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
     @app.get("/krypto/strategie")
     def crypto_strategies():
         cd = crypto_data()
-        rows, _ = build_crypto_rows(cd, {})
+        rows, _ = build_crypto_rows(cd, {"history": "1"})
         now = crypto.utcnow()
         fee = (_float(request.args.get("fee")) or strategy.FEE * 100) / 100
         stake = _float(request.args.get("stake")) or strategy.STAKE

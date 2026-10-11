@@ -37,7 +37,7 @@
         <tr class="{{ 'sel' if s.key == selected.key }}" onclick="location.href='{{ url_for('crypto_strategies', s=s.key, fee=fee * 100, stake=stake, **({'custom': 1} if s.key == 'custom' else {})) }}'">
           <td style="white-space:normal; min-width:260px"><span class="name">{{ s.name }}</span>{% if s.saved %} <span class="chip pill-ok">zapisana</span>{% endif %}
             <div class="rules">{% for rule in s.rules %}<span class="chip">{{ rule }}</span>{% endfor %}</div></td>
-          <td class="num">{{ r.closed }}{% if r.no_data %}<span class="sub" title="brak cen w chwili wyjścia">+{{ r.no_data }} bez danych</span>{% endif %}</td>
+          <td class="num">{{ r.closed }}{% if s.hist_closed %}<span class="sub">w tym historia {{ s.hist_closed }}</span>{% endif %}{% if r.no_data %}<span class="sub" title="brak cen w chwili wyjścia">+{{ r.no_data }} bez danych</span>{% endif %}</td>
           <td class="num">{{ r.open }}</td>
           <td class="num">{{ r.win_rate|pct(false) }}</td>
           <td class="num {{ ('up' if r.avg >= 0 else 'down') if r.avg is not none }}">{{ r.avg|pct }}</td>
@@ -139,7 +139,7 @@
       <tbody>
       {% for t in r.trades %}{% set row = t.row %}
         <tr onclick="location.href='{{ url_for('crypto_event', event_id=row.id) }}'">
-          <td><b class="mono">{{ row.symbol }}</b><span class="sub">{{ row.trigger_labels|join(', ') }} · ocena {{ row.signal.score }}</span></td>
+          <td><b class="mono">{{ row.symbol }}</b>{% if row.origin == 'backfill' %} <span class="chip" title="sygnał odtworzony z historii Binance">historia</span>{% endif %}<span class="sub">{{ row.trigger_labels|join(', ') }} · ocena {{ row.signal.score }}</span></td>
           <td class="mono" data-sort="{{ t.entry_at }}">{{ t.entry_at|local("%d.%m %H:%M") }}</td>
           <td class="num">{{ t.entry|usd }}</td>
           <td class="mono" data-sort="{{ t.exit_at or '' }}">{{ t.exit_at|local("%d.%m %H:%M") if t.exit_at else '—' }}</td>

@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import app as webapp
+import backfill
 import candles
 import crypto
 import form4_scanner as fs
@@ -64,17 +65,19 @@ def scan(only: set[str], force_whales: bool):
             log(f"  nowe zgłoszenia: {scanner.last_new}, błąd: {scanner.last_error}, ceny: {tracker.last_error}")
         else:
             log("insiderzy: pominięte, brak sekretu SEC_USER_AGENT")
-    candle_status = Status()
+    candle_status, history_status = Status(), Status()
     if "crypto" in only:
         timed("krypto", cscanner.run_once)
         log(f"  nowe ruchy: {cscanner.last_new}, błąd: {cscanner.last_error}")
         timed("świece i dziennik strategii", lambda: candles_and_journal(store, cstore, candle_status))
+        timed("historia 2 mies. z Binance", lambda: run_backfill(history_status))
     # Whale holders change slowly and the scan is the heaviest; every ~30 min is plenty.
     if "whales" in only and (force_whales or datetime.now(timezone.utc).minute % WHALES_EVERY_MIN < 10):
         timed("wieloryby", wscanner.run_once)
         log(f"  nowe portfele: {wscanner.last_new}, błąd: {wscanner.last_error}")
 
-    objs = {"stocks": scanner, "tracker": tracker, "crypto": cscanner, "whales": wscanner, "candles": candle_status}
+    objs = {"stocks": scanner, "tracker": tracker, "crypto": cscanner, "whales": wscanner, "candles": candle_status,
+            "history": history_status}
     fields = ("last_run", "last_new", "last_error")
     if only:
         old = read_status()
@@ -199,6 +202,19 @@ def candles_and_journal(store, cstore, status: Status, now=None) -> None:
     written = sum(journal.record(key, params, strategy.backtest(recent, cdata["prices"], params, now, paths=paths)["trades"],
                                  is_final) for key, params in catalog)
     log(f"  dziennik strategii: zapisano/zaktualizowano {written} transakcji")
+
+
+def run_backfill(status: Status) -> None:
+    """One-time replay of 2 months of radar history, in ~5-minute chunks per scan until finished."""
+    try:
+        r = backfill.run(webapp.DB_PATH)
+        status.last_new = r.get("new_signals", r.get("signals"))
+        log(f"  historia: {'gotowa' if r['finished'] else 'w toku'}, tokeny {r['coins']}/{r.get('of', r['coins'])}, "
+            f"nowe sygnały {r.get('new_signals', 0)}")
+    except Exception as exc:  # never break the scan
+        status.last_error = safety.safe_error(exc)
+        log(f"  historia: błąd {status.last_error}")
+    status.last_run = datetime.now().strftime("%H:%M:%S")
 
 
 def site_url() -> str:

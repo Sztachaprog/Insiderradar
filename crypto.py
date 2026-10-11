@@ -141,6 +141,10 @@ class CryptoStore:
                 coin_id TEXT NOT NULL, ts TEXT NOT NULL, price REAL NOT NULL, PRIMARY KEY (coin_id, ts))""")
             c.execute("""CREATE TABLE IF NOT EXISTS crypto_coins (
                 coin_id TEXT PRIMARY KEY, data TEXT NOT NULL, fetched_at TEXT NOT NULL)""")
+            try:  # databases from before history backfill: every stored signal is a live one
+                c.execute("ALTER TABLE crypto_events ADD COLUMN origin TEXT NOT NULL DEFAULT 'live'")
+            except sqlite3.OperationalError:
+                pass
             c.execute("""CREATE TABLE IF NOT EXISTS crypto_news (
                 coin_id TEXT PRIMARY KEY, items TEXT NOT NULL, fetched_at TEXT NOT NULL)""")
             c.execute("""CREATE TABLE IF NOT EXISTS crypto_strategies (
@@ -151,25 +155,30 @@ class CryptoStore:
     def _conn(self):
         return sqlite3.connect(self.path)
 
-    def add_event(self, coin: dict, triggers: list[str], at: datetime) -> None:
+    def add_event(self, coin: dict, triggers: list[str], at: datetime, origin: str = "live") -> int | None:
+        """Store a signal; returns its id, or None if this coin already has a signal at that moment."""
         metrics = {k: coin.get(k) for k in (
             "market_cap", "market_cap_rank", "fully_diluted_valuation", "total_volume",
             "circulating_supply", "total_supply", "max_supply", "ath", "ath_change_percentage",
             "price_change_percentage_1h_in_currency", "price_change_percentage_24h_in_currency",
             "price_change_percentage_7d_in_currency")}
         with self._conn() as c:
-            c.execute("INSERT INTO crypto_events (coin_id, symbol, name, image, detected_at, base_price, "
-                      "triggers, metrics) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                      (coin["id"], coin["symbol"].upper(), coin["name"], coin.get("image", ""), iso(at),
-                       coin["current_price"], json.dumps(triggers), json.dumps(metrics)))
+            if c.execute("SELECT 1 FROM crypto_events WHERE coin_id = ? AND detected_at = ?",
+                         (coin["id"], iso(at))).fetchone():
+                return None
+            cur = c.execute("INSERT INTO crypto_events (coin_id, symbol, name, image, detected_at, base_price, "
+                            "triggers, metrics, origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            (coin["id"], coin["symbol"].upper(), coin["name"], coin.get("image", ""), iso(at),
+                             coin["current_price"], json.dumps(triggers), json.dumps(metrics), origin))
+            return cur.lastrowid
 
     def events(self) -> list[dict]:
         with self._conn() as c:
             rows = c.execute("SELECT id, coin_id, symbol, name, image, detected_at, base_price, triggers, "
-                             "metrics FROM crypto_events ORDER BY detected_at DESC").fetchall()
+                             "metrics, origin FROM crypto_events ORDER BY detected_at DESC").fetchall()
         return [{"id": r[0], "coin_id": r[1], "symbol": r[2], "name": r[3], "image": r[4],
                  "detected_at": r[5], "base_price": r[6], "triggers": json.loads(r[7]),
-                 "metrics": json.loads(r[8])} for r in rows]
+                 "metrics": json.loads(r[8]), "origin": r[9]} for r in rows]
 
     def save_prices(self, coin_id: str, points: list[tuple[str, float]]) -> None:
         with self._conn() as c:
@@ -315,7 +324,7 @@ def analyze(event: dict, details: dict | None, weights: dict | None = None) -> d
     mcap, vol = m.get("market_cap") or 0, m.get("total_volume") or 0
     ch24 = (m.get("price_change_percentage_24h_in_currency") or 0) / 100
     ch7 = (m.get("price_change_percentage_7d_in_currency") or 0) / 100
-    ath = (m.get("ath_change_percentage") or 0) / 100
+    ath = m["ath_change_percentage"] / 100 if m.get("ath_change_percentage") is not None else None
     fdv = m.get("fully_diluted_valuation")
     reasons, factors, score = [], [], BASE_SCORE
 
@@ -343,7 +352,9 @@ def analyze(event: dict, details: dict | None, weights: dict | None = None) -> d
         add("trend7d", f"Trend tygodniowy też w górę ({ch7:+.0%} w 7 dni).")
     if "trending" in event["triggers"]:
         add("trending", "Jest na liście trending CoinGecko.")
-    if ath >= -0.10:
+    if ath is None:
+        pass  # unknown (history replayed from exchange candles)
+    elif ath >= -0.10:
         add("near_ath", f"Kurs jest blisko ATH ({ath:.0%}). Nad nim nie ma sprzedających z górki.")
     elif ath <= -0.85:
         add("far_from_ath", f"Kurs jest {abs(ath):.0%} poniżej ATH. Jest duże pole do odbicia, ale projekt bywa już martwy.")
