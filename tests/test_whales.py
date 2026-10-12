@@ -231,3 +231,18 @@ def test_scanner_covers_extra_chain_and_isolates_failures(tmp_path, monkeypatch)
     base_row = next(t for t in d["tokens"] if t["chain"] == "base")
     assert base_row["explorer"] == "https://basescan.org" and base_row["address"] == TOK
     assert {b["explorer"] for b in d["big"]} == {"https://etherscan.io", "https://basescan.org"}
+
+
+def test_whales_move_to_their_own_database(tmp_path):
+    main = whales.WhaleStore(tmp_path / "form4.db")
+    with main._conn() as c:
+        c.execute("INSERT OR REPLACE INTO whale_signals VALUES ('tok', '2026-10-01T00:00:00Z', 1.5, 3)")
+        c.execute("CREATE TABLE crypto_events (id INTEGER)")              # other data stays behind
+    own = whales.WhaleStore(tmp_path / "whales.db")
+    counts = own.import_from(tmp_path / "form4.db")
+    assert counts["whale_signals"] == 1
+    with own._conn() as c:
+        tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        assert c.execute("SELECT price FROM whale_signals").fetchone() == (1.5,)
+    assert "crypto_events" not in tables
+    assert own.import_from(tmp_path / "form4.db")["whale_signals"] == 1   # running it again is harmless

@@ -38,6 +38,8 @@ import whales
 import xtb
 
 DB_PATH = Path(os.environ.get("FORM4_DB", Path(__file__).with_name("form4.db")))
+# Whales can live in their own database (their own GitHub workflow); by default the same file.
+WHALES_DB_PATH = Path(os.environ["WHALES_DB"]) if os.environ.get("WHALES_DB") else None
 SCAN_PAGES = int(os.environ.get("SCAN_PAGES", "3"))
 SCAN_INTERVAL_MIN = int(os.environ.get("SCAN_INTERVAL_MIN", "15"))
 TRACK_DAYS = int(os.environ.get("TRACK_DAYS", "120"))  # keep refreshing prices this long after adding
@@ -619,7 +621,7 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         tracker = tracker or Tracker(store, market.YahooClient, sec_factory=lambda: fs.SecClient(ua),
                                      xtb_factory=xtb.XtbClient)
         scanner = Scanner(store, lambda: fs.SecClient(ua), SCAN_PAGES, after_scan=tracker.refresh)
-    wstore = whale_store or whales.WhaleStore(store.path)
+    wstore = whale_store or whales.WhaleStore(WHALES_DB_PATH or store.path)
     if whale_scanner is None:
         whale_scanner = whales.WhaleScanner(wstore, whales.client_for)
     if crypto_scanner is None:

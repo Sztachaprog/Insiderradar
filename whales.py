@@ -218,6 +218,10 @@ def tradable_token(t: dict) -> bool:
 
 # ---------- Storage ----------
 
+WHALE_TABLES = ("whale_tokens", "whale_token_prices", "whales", "whale_balances", "whale_transfers",
+                "whale_sync", "address_labels", "whale_signals")
+
+
 class WhaleStore:
     def __init__(self, path):
         self.path = str(path)
@@ -253,6 +257,24 @@ class WhaleStore:
 
     def _conn(self):
         return sqlite3.connect(self.path)
+
+    def import_from(self, src) -> dict[str, int]:
+        """Copy the whale tables from another database (whales moved out of the main database)."""
+        c = sqlite3.connect(self.path)
+        try:
+            c.execute("ATTACH DATABASE ? AS src", (str(src),))
+            have = {r[0] for r in c.execute("SELECT name FROM src.sqlite_master WHERE type = 'table'")}
+            counts = {}
+            for table in WHALE_TABLES:
+                if table in have:
+                    cols = ", ".join(r[1] for r in c.execute(f"PRAGMA src.table_info({table})"))
+                    counts[table] = c.execute(f"INSERT OR REPLACE INTO main.{table} ({cols}) "
+                                              f"SELECT {cols} FROM src.{table}").rowcount
+            c.commit()
+            c.execute("DETACH DATABASE src")
+            return counts
+        finally:
+            c.close()
 
     def _rows(self, sql: str, *args) -> list[dict]:
         with self._conn() as c:

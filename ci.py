@@ -50,7 +50,8 @@ EVERY = {
     "whales": int(os.environ.get("EVERY_WHALES_MIN", "55")),
     "export": int(os.environ.get("EVERY_EXPORT_MIN", "9")),
 }
-STATUS = Path("scan_status.json")  # scanner status from the scan step, shown by the export step
+STATUS = Path(os.environ.get("SCAN_STATUS", "scan_status.json"))  # scanner status, shown by the export step
+WHALES_STATUS = Path("whales_status.json")   # written by the whales workflow (SCAN_STATUS=whales_status.json)
 
 
 def log(msg: str) -> None:
@@ -122,7 +123,7 @@ class Schedule:
 def scan(only: set[str], force_whales: bool, force_all: bool = False):
     store = webapp.Store(webapp.DB_PATH)
     cstore = crypto.CryptoStore(webapp.DB_PATH)
-    wstore = whales.WhaleStore(webapp.DB_PATH)
+    wstore = whales.WhaleStore(webapp.WHALES_DB_PATH or webapp.DB_PATH)
     ua = os.environ.get("SEC_USER_AGENT")
     tracker = webapp.Tracker(store, market.YahooClient, sec_factory=(lambda: fs.SecClient(ua)) if ua else None,
                              xtb_factory=xtb.XtbClient)
@@ -174,24 +175,24 @@ def scan(only: set[str], force_whales: bool, force_all: bool = False):
         STATUS.write_text(json.dumps({**old, **{k: {f: getattr(o, f, None) for f in fields}
                                                 for k, o in objs.items() if getattr(o, "last_run", None)}}))
     else:
-        for k, vals in read_status().items():
+        for k, vals in {**read_status(), **read_status(WHALES_STATUS, keys={"whales"})}.items():
             if k in objs and isinstance(vals, dict):
                 for f, v in vals.items():
                     setattr(objs[k], f, v)
     return store, cstore, wstore, scanner, tracker, cscanner, wscanner
 
 
-def read_status() -> dict:
+def read_status(path: Path | None = None, keys: set[str] | None = None) -> dict:
     """Scanner status saved by the previous step; a missing, empty or broken file is just 'no status'."""
     try:
-        data = json.loads(STATUS.read_text())
+        data = json.loads((path or STATUS).read_text())
     except (OSError, ValueError):
         return {}
     if not isinstance(data, dict):
         return {}
     # Statuses written before error scrubbing existed could contain URLs with keys.
     return {k: {f: safety.scrub(v) if isinstance(v, str) else v for f, v in vals.items()}
-            for k, vals in data.items() if isinstance(vals, dict)}
+            for k, vals in data.items() if isinstance(vals, dict) and (keys is None or k in keys)}
 
 
 def _cache_methods(obj, names: list[str]) -> None:
@@ -394,11 +395,15 @@ def main(argv=None) -> int:
     p.add_argument("--no-export", action="store_true")
     p.add_argument("--whales", action="store_true", help="scan whales regardless of the clock")
     p.add_argument("--all", action="store_true", help="run every task now, ignoring the schedule")
+    p.add_argument("--import-whales", metavar="DB", help="copy whale tables from DB into WHALES_DB first")
     p.add_argument("--base", default=os.environ.get("PAGES_BASE")
                    or "/" + os.environ.get("GITHUB_REPOSITORY", "/").split("/")[-1])
     args = p.parse_args(argv)
+    if args.import_whales:
+        target = whales.WhaleStore(webapp.WHALES_DB_PATH or webapp.DB_PATH)
+        log(f"wieloryby przeniesione z {args.import_whales}: {target.import_from(args.import_whales)}")
     parts = scan(set() if args.no_scan else set(args.only.split(",")), args.whales, args.all)
-    if not args.no_scan:
+    if not args.no_scan and args.only != "whales":   # alerts go out from the main scan, which reads both databases
         send_alerts(parts)
     if args.no_export:
         return 0
