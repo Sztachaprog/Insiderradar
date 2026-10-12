@@ -3,18 +3,16 @@ name: Skan danych
 # Triggered every ~5 min by an external cron (cron-job.org -> workflow_dispatch API);
 # GitHub's own schedule is best-effort and often skipped, so it is only an hourly safety net.
 # Every run: crypto via Binance (+ candles, strategy journal, Telegram alerts). Slower tasks run
-# when due (ci.py remembers their last run in the database): CoinGecko ranking ~hourly,
-# insiders ~15 min, whales ~hourly, static site ~10 min.
+# when due (ci.py remembers their last run in the database): CoinGecko ranking as often as the
+# monthly budget allows, insiders ~15 min, static site ~10 min.
 # The database lives xz-compressed on the `data` branch (one force-pushed commit).
+# Whales are scanned by scanWhales.yml into their own database (`data-whales` branch);
+# this workflow only reads it, for the site and alerts.
 on:
   schedule:
     - cron: "47 * * * *"
   workflow_dispatch:
     inputs:
-      whales:
-        description: "Skanuj też wieloryby niezależnie od godziny"
-        type: boolean
-        default: false
       all:
         description: "Uruchom wszystkie zadania teraz (bez czekania na ich porę)"
         type: boolean
@@ -39,18 +37,15 @@ jobs:
     env:
       TZ: Europe/Warsaw
       FORM4_DB: form4.db
+      WHALES_DB: whales.db          # read-only here, written by scanWhales.yml
       SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
       COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
-      BLOCKSCOUT_API_KEY: ${{ secrets.BLOCKSCOUT_API_KEY }}   # optional: whales on Arbitrum + Optimism (free tier)
-      HELIUS_API_KEY: ${{ secrets.HELIUS_API_KEY }}           # optional: whales on Solana
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}   # optional: alerts
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       # Smaller per-run budgets: runs are frequent, so coverage builds up over the day.
       HISTORY_PER_RUN: "2"
       CRYPTO_DETAILS_PER_RUN: "3"     # CoinGecko's free plan: ~10k calls/month
       GT_CALLS_PER_RUN: "5"           # GeckoTerminal calls per run (runs are every 5 min)
-      WHALE_HOLDERS_PER_RUN: "10"
-      WHALE_TRANSFERS_PER_RUN: "25"
     steps:
       - uses: actions/checkout@v5
 
@@ -77,8 +72,15 @@ jobs:
             echo "Brak gałęzi data, start od pustej bazy"
           fi
 
+      - name: Pobierz bazę wielorybów (tylko do odczytu)
+        run: |
+          if git fetch --depth=1 origin data-whales 2>/dev/null; then
+            git show origin/data-whales:whales.db.xz | xz -dc > whales.db
+            git show origin/data-whales:whales_status.json > whales_status.json 2>/dev/null || true
+          fi
+
       - name: Skan
-        run: python ci.py --no-export ${{ inputs.whales && '--whales' || '' }} ${{ inputs.all && '--all' || '' }}
+        run: python ci.py --no-export --only stocks,crypto ${{ inputs.all && '--all' || '' }}
 
       - name: Zapisz bazę na gałęzi data
         if: success() || failure()

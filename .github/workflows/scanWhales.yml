@@ -1,0 +1,65 @@
+name: Scan whales
+
+on:
+  schedule:
+    - cron: "17 * * * *"        # minutes, hours, days, months, day of week - it means in 17min of every hour (hours are in UTC)
+  workflow_dispatch:              # trigger that github recognize, make button in github actions that make us able to run workflow manually
+
+permissions:
+  contents: write                 # set permission to write and save in our repository
+
+concurrency:                      # If would be the same groups in different yaml, concurrency wait for one to scan before second start to not overwrite informations
+  group: whales
+  cancel-in-progress: false        # wait for end of first depoly run starting new one (max one run in queue)
+
+jobs:                             # jobs to do in workflow
+  whales:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30           # if something suspend task, github stop job after 30minutes 
+    env:                          # env that python reads
+      TZ: Europe/Warsaw
+      WHALES_DB: whales.db
+      SCAN_STATUS: whales_status.json
+      BLOCKSCOUT_API_KEY: ${{ secrets.BLOCKSCOUT_API_KEY }}
+      HELIUS_API_KEY: ${{ secrets.HELIUS_API_KEY }}
+      WHALE_HOLDERS_PER_RUN: "10"
+      WHALE_TRANSFERS_PER_RUN: "25"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip                # remember last used libraies
+        
+      - run: pip install -r requirements.txt
+
+      - name: Download whales db
+        id: download
+        run: |
+          if git fetch --depth=1 origin data-whales 2>/dev/null; then
+            git show origin/data-whales:whales.db.xz | xz -dc > whales.db
+            echo "Baza wielorybów: $(du -h whales.db | cut -f1)"
+          else
+            echo "Pierwsze uruchomienie: przenoszę wieloryby z gałęzi data"
+            git fetch --depth=1 origin data
+            git show origin/data:form4.db.xz | xz -dc > /tmp/form4.db
+            python ci.py --import-whales /tmp/form4.db --no-scan --no-export
+          fi
+      - name: Whales scan
+        run: python ci.py --only whales --whales --no-export
+
+      - name: Save db on data-whales branch
+        if: (success() || failure()) && steps.download.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          [ -f whales.db ] || exit 0
+          mkdir -p /tmp/out && xz -6 -T0 -c whales.db > /tmp/out/whales.db.xz
+          cp whales_status.json /tmp/out/ 2>/dev/null || true
+          cd /tmp/out
+          git init -q -b data-whales
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A && git commit -qm "Wieloryby $(date '+%Y-%m-%d %H:%M %Z')"
+          git push -fq "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" data-whales
