@@ -363,8 +363,9 @@ def collect_alerts(parts, now=None) -> list[tuple[str, str]]:
     hits: dict[int, list[str]] = {}
     for name, params in catalog:
         for r in fresh:
-            if strategy.matches(r, params):
-                hits.setdefault(r["id"], []).append(name)
+            if strategy.matches(r, params):   # the direction matters: a short is "sell", not "buy"
+                side = " (SHORT)" if params.get("side") == "short" and "short" not in name.lower() else ""
+                hits.setdefault(r["id"], []).append(name + side)
     alerts += notify.crypto_alerts(fresh, site, hits)
 
     # Whale spot signals and big accumulation / distribution transfers.

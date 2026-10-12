@@ -810,11 +810,14 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         fresh = now - timedelta(minutes=60)
         candidates = [t for t in selected["result"]["trades"]
                       if t["status"] == "open" and crypto.parse_iso(t["entry_at"]) >= fresh]
+        for t in candidates:
+            t["tp_price"], t["sl_price"] = strategy.levels(t["entry"], selected["params"])
         tabs, active = strategy_tabs("strategies")
         return render_template("crypto_strategies.html", catalog=catalog, selected=selected, tabs=tabs, active=active,
                                candidates=candidates, fee=fee, stake=stake, small_sample=SMALL_SAMPLE,
                                form=strategy.form_values(selected["params"]),
-                               trigger_labels=crypto.TRIGGER_LABELS, **common(page="strategies"))
+                               trigger_labels=crypto.TRIGGER_LABELS, sides=strategy.SIDES,
+                               **common(page="strategies"))
 
     # ----- positions: open trades, trade history, one position's chart -----
 
@@ -828,8 +831,9 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         for key, name, params in catalog:
             full = {**strategy.DEFAULTS, **params}
             for t in strategy.journal_trades(journal.rows(key, strategy.version(params)), events):
-                t.update(strategy_key=key, strategy_name=name, full=full,
-                         tp_price=t["entry"] * (1 + full["tp"]), sl_price=t["entry"] * (1 - full["sl"]),
+                tp_price, sl_price = strategy.levels(t["entry"], full)
+                t.update(strategy_key=key, strategy_name=name, full=full, side=full["side"],
+                         tp_price=tp_price, sl_price=sl_price,
                          deadline=crypto.iso(crypto.parse_iso(t["entry_at"]) + timedelta(hours=full["hold_h"])))
                 out.append(t)
         out.sort(key=lambda t: t["entry_at"], reverse=True)
@@ -857,7 +861,7 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         for t in open_:
             ts, px = now_px.get(t["event_id"], (None, events[t["event_id"]].get("price_now")))
             t["now_price"], t["now_ts"] = px, ts
-            t["now_ret"] = px / t["entry"] - 1 if px else None
+            t["now_ret"] = strategy.gross_return(t, px) if px else None
         tabs, active = strategy_tabs("open")
         return render_template("positions.html", mode="open", positions=open_, tabs=tabs, active=active,
                                heading="Otwarte pozycje", **common(page="strategies"))
@@ -888,7 +892,7 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         step = max(1, len(view) // 400)
         view = view[::step]
         if not t["exit_at"] and bars:
-            t["now_price"], t["now_ret"] = bars[-1][4], bars[-1][4] / t["entry"] - 1
+            t["now_price"], t["now_ret"] = bars[-1][4], strategy.gross_return(t, bars[-1][4])
         chart = {"labels": [crypto.local(b[0], "%d.%m %H:%M") for b in view], "ts": [b[0] for b in view],
                  "close": [b[4] for b in view], "high": [b[2] for b in view], "low": [b[3] for b in view]}
         return render_template("position.html", t=t, chart=chart, has_candles=bool(kstore.paths([event_id])),

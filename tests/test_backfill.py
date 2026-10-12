@@ -32,3 +32,22 @@ def test_unknown_ath_is_not_scored_as_near_ath():
     e = {"triggers": ["pump24"], "metrics": {"market_cap": 50e6, "total_volume": 5e6, "ath_change_percentage": None,
                                              "price_change_percentage_24h_in_currency": 30}}
     assert "near_ath" not in crypto.analyze(e, None)["factors"]
+
+
+def test_strategies_added_later_get_their_history_once(tmp_path):
+    import candles
+    import strategy
+    db = tmp_path / "h.db"
+    cstore, kstore = crypto.CryptoStore(db), candles.CandleStore(db)
+    at = datetime(2026, 9, 2, tzinfo=timezone.utc)
+    coin = {"id": "xyz", "symbol": "xyz", "name": "Xyz", "image": "", "current_price": 1.0, "market_cap": 50e6,
+            "total_volume": 5e6, "price_change_percentage_24h_in_currency": 30}
+    eid = cstore.add_event(coin, ["pump24"], at, origin="backfill")
+    t = int(at.timestamp())
+    kstore.save(eid, candles.RES_MIN, [(t + 60, 1.0, 1.0, 0.85, 0.86, 1e6)])         # falls 15% in a minute
+    cstore.save_strategy("Short", {"triggers": ["pump24"], "side": "short", "tp": 0.10, "sl": 0.05})
+    assert backfill.record_journal(db, only_missing=True) > 0
+    assert backfill.record_journal(db, only_missing=True) == 0                      # nothing left to add
+    key = f"c{cstore.strategies()[0]['id']}"
+    (trade,) = strategy.Journal(db).rows(key, strategy.version(cstore.strategies()[0]["params"]))
+    assert trade["reason"] == "take-profit" and trade["final"] == 1

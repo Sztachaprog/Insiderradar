@@ -1,9 +1,9 @@
 """Paper-trading lab for crypto day trades on radar events.
 
-A strategy = entry filter (what kind of move, how big a token, which score) + exit
-rules (take-profit, stop-loss, max hold). Each matching event is simulated on the
-stored price path from the moment of detection: buy at the detection price, sell at
-the first snapshot that hits TP/SL or when the hold time runs out, minus fees.
+A strategy = entry filter (what kind of move, how big a token, which score) + side
+(long or short) + exit rules (take-profit, stop-loss, max hold). Each matching event is
+simulated on the stored price path from the moment of detection: enter at the detection
+price, exit at the first bar that hits TP/SL or when the hold time runs out, minus fees.
 
 Paths are snapshots (every scan, ~15 min) plus hourly history for gaps, so intraday
 spikes between snapshots are invisible: TP fills at the TP level (a resting limit
@@ -28,7 +28,11 @@ DEFAULTS = {
     "min_ch24": None, "max_ch24": None,       # 24h change at detection, e.g. 0.25 = +25%
     "min_vol": None, "max_vol": None,         # volume / market cap at detection
     "tp": 0.10, "sl": 0.05, "hold_h": 24,
+    "side": "long",          # "short": profit when the price falls (TP below the entry, SL above)
 }
+# Parameters added after trades were journaled: left out of the version while at their default,
+# so adding one never re-versions (and empties) the journals of existing strategies.
+ADDED_LATER = ("side",)
 REFERENCE_ONLY = {"all"}   # baseline "buy every signal": compared against, not listed as positions
 FEE = 0.005      # round trip: ~0.1% exchange fee per side + slippage on small caps
 STAKE = 100      # $ per trade for the equity curve
@@ -51,6 +55,10 @@ PRESETS = [
     ("micro", "Mikro-capy bez pompy",
      "Tokeny poniżej $30 mln, bez skrajnego wolumenu (< 2× kap.) i bez parabol (24h < +50%).",
      {"max_mcap": 30e6, "max_vol": 2, "max_ch24": 0.5, "tp": 0.15, "sl": 0.07}),
+    ("fade_pump", "Short po pompie",
+     "Odwrotność gonienia pompy: gra na spadek tokena, który urósł o 25% lub więcej w 24h. "
+     "Kupowanie takich ruchów systematycznie traci, więc sprawdzamy, czy zarabia granie przeciwko nim.",
+     {"triggers": ["pump24"], "side": "short", "tp": 0.10, "sl": 0.07}),
 ]
 
 FORM_FIELDS = {  # name: (cast, scale applied to the form value)
@@ -60,6 +68,7 @@ FORM_FIELDS = {  # name: (cast, scale applied to the form value)
     "min_vol": (float, 1), "max_vol": (float, 1),
     "tp": (float, 0.01), "sl": (float, 0.01), "hold_h": (int, 1),
 }
+SIDES = {"long": "long (wzrost)", "short": "short (spadek)"}
 
 
 def params_from_form(form) -> dict:
@@ -77,6 +86,8 @@ def params_from_form(form) -> dict:
         vals = form.getlist(name) if hasattr(form, "getlist") else form.get(name, [])
         if vals:
             p[name] = [v for v in vals if v in crypto.TRIGGER_LABELS]
+    if form.get("side") == "short":
+        p["side"] = "short"
     return p
 
 
@@ -90,13 +101,13 @@ def form_values(params: dict) -> dict:
             out[name] = ""
         else:
             out[name] = f"{v / scale:g}" if cast is float else str(v)
-    out["triggers"], out["exclude"] = p["triggers"], p["exclude"]
+    out["triggers"], out["exclude"], out["side"] = p["triggers"], p["exclude"], p["side"]
     return out
 
 
 def describe(params: dict) -> list[str]:
     p = {**DEFAULTS, **params}
-    parts = []
+    parts = ["SHORT"] if p["side"] == "short" else []
     if p["triggers"]:
         parts.append("ruch: " + " lub ".join(crypto.TRIGGER_LABELS[t] for t in p["triggers"]))
     if p["exclude"]:
@@ -112,8 +123,17 @@ def describe(params: dict) -> list[str]:
         parts.append(f"24h {lo} … {hi}")
     if p["min_vol"] is not None or p["max_vol"] is not None:
         parts.append(f"wolumen {p['min_vol'] or 0:g}–{p['max_vol'] if p['max_vol'] is not None else '∞'}× kap.")
-    parts.append(f"TP +{p['tp']:.0%} · SL −{p['sl']:.0%} · max {p['hold_h']} h")
+    up, down = ("−", "+") if p["side"] == "short" else ("+", "−")
+    parts.append(f"TP {up}{p['tp']:.0%} · SL {down}{p['sl']:.0%} · max {p['hold_h']} h")
     return parts
+
+
+def levels(entry: float, params: dict) -> tuple[float, float]:
+    """(take-profit price, stop-loss price) for a position opened at entry."""
+    p = {**DEFAULTS, **params}
+    if p["side"] == "short":
+        return entry * (1 - p["tp"]), entry * (1 + p["sl"])
+    return entry * (1 + p["tp"]), entry * (1 - p["sl"])
 
 
 def matches(row: dict, params: dict) -> bool:
@@ -148,18 +168,20 @@ def _bars(points: list[tuple]):
 
 
 def simulate(row: dict, points: list[tuple], params: dict, now, fee: float = FEE) -> dict:
-    """Buy at the price recorded at detection, then walk the price path:
-    take-profit if a bar's high reaches it, stop-loss if a bar's low reaches it (both in one
-    bar -> stop-loss first, the cautious reading), otherwise sell when the hold time ends.
-    A bar that opens beyond a level (a gap) fills at its open, like a real order would."""
+    """Enter at the price recorded at detection, then walk the price path. Long: take-profit
+    if a bar's high reaches it, stop-loss if its low does; short: the mirror image. Both in one
+    bar -> stop-loss first (the cautious reading), otherwise exit when the hold time ends.
+    A bar that opens beyond a level (a gap) fills at its open, like a real order would.
+    peak / trough are the price extremes during the trade, whichever the side."""
     p = {**DEFAULTS, **params}
+    short = p["side"] == "short"
     t0 = crypto.parse_iso(row["detected_at"])
     deadline = t0 + timedelta(hours=p["hold_h"])
     base = row["base_price"]
-    tp_level, sl_level = base * (1 + p["tp"]), base * (1 - p["sl"])
+    tp_level, sl_level = levels(base, p)
     trade = {"row": row, "entry": base, "entry_at": row["detected_at"], "exit": None, "exit_at": None,
              "reason": None, "gross": None, "net": None, "status": "open", "peak": 0.0, "trough": 0.0,
-             "source": "candles" if points and len(points[0]) > 2 else "snapshots"}
+             "source": "candles" if points and len(points[0]) > 2 else "snapshots", "side": p["side"]}
     last = None
 
     def time_exit(after: tuple | None):
@@ -179,22 +201,33 @@ def simulate(row: dict, points: list[tuple], params: dict, now, fee: float = FEE
             return time_exit((ts, o))
         trade["peak"] = max(trade["peak"], h / base - 1)
         trade["trough"] = min(trade["trough"], low / base - 1)
-        if low <= sl_level:
-            return _close(trade, min(o, sl_level) if is_candle else low, ts, "stop-loss", fee)
-        if h >= tp_level:
-            return _close(trade, max(o, tp_level) if is_candle else tp_level, ts, "take-profit", fee)
+        if short:
+            if h >= sl_level:
+                return _close(trade, max(o, sl_level) if is_candle else h, ts, "stop-loss", fee)
+            if low <= tp_level:
+                return _close(trade, min(o, tp_level) if is_candle else tp_level, ts, "take-profit", fee)
+        else:
+            if low <= sl_level:
+                return _close(trade, min(o, sl_level) if is_candle else low, ts, "stop-loss", fee)
+            if h >= tp_level:
+                return _close(trade, max(o, tp_level) if is_candle else tp_level, ts, "take-profit", fee)
         last = (ts, c)
     if now >= deadline:
         return time_exit(None)
     if last:  # still running: mark to market
-        trade["gross"] = last[1] / base - 1
+        trade["gross"] = gross_return(trade, last[1])
         trade["net"] = trade["gross"] - fee
     return trade
 
 
+def gross_return(trade: dict, price: float) -> float:
+    """Return of the position at this price before fees (a short gains when the price falls)."""
+    move = price / trade["entry"] - 1
+    return -move if trade.get("side") == "short" else move
+
+
 def _close(trade: dict, price: float, ts: str, reason: str, fee: float) -> dict:
-    trade.update(exit=price, exit_at=ts, reason=reason, status="closed",
-                 gross=price / trade["entry"] - 1)
+    trade.update(exit=price, exit_at=ts, reason=reason, status="closed", gross=gross_return(trade, price))
     trade["net"] = trade["gross"] - fee
     return trade
 
@@ -240,7 +273,11 @@ def summarize(trades: list[dict], stake: float = STAKE) -> dict:
 # strategy's rules are edited later (new rules = new version = a separate journal).
 
 def version(params: dict) -> str:
-    return hashlib.sha1(json.dumps({**DEFAULTS, **params}, sort_keys=True).encode()).hexdigest()[:8]
+    full = {**DEFAULTS, **params}
+    for k in ADDED_LATER:
+        if full[k] == DEFAULTS[k]:
+            del full[k]
+    return hashlib.sha1(json.dumps(full, sort_keys=True).encode()).hexdigest()[:8]
 
 
 class Journal:

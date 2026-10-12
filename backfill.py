@@ -98,7 +98,8 @@ def run(db_path, cg_factory=crypto.CoinGeckoClient, client: candles.CandleClient
         meta = dict(c.execute("SELECT key, value FROM backfill_meta"))
         done = {r[0] for r in c.execute("SELECT symbol FROM backfill_progress")}
     if meta.get("finished"):
-        return {"finished": True, "signals": int(meta.get("signals", 0)), "coins": len(done)}
+        added = record_journal(db_path, now, only_missing=True)   # new or edited strategies get history too
+        return {"finished": True, "signals": int(meta.get("signals", 0)), "coins": len(done), "journaled": added}
 
     live_events = [e for e in cstore.events() if e.get("origin", "live") == "live"]
     until = int(crypto.parse_iso(min(e["detected_at"] for e in live_events)).timestamp()) if live_events \
@@ -149,8 +150,9 @@ def run(db_path, cg_factory=crypto.CoinGeckoClient, client: candles.CandleClient
     return {"finished": finished, "coins": len(done), "of": len(coins), "new_signals": new_signals}
 
 
-def record_journal(db_path, now: datetime | None = None) -> int:
-    """Simulate every strategy on the historic signals; their windows are complete, so trades are final."""
+def record_journal(db_path, now: datetime | None = None, only_missing: bool = False) -> int:
+    """Simulate every strategy on the historic signals; their windows are complete, so trades are final.
+    only_missing: just the strategy versions that have no history trades yet."""
     import app as webapp  # local import: app imports half the project
     now = now or crypto.utcnow()
     cstore, store = crypto.CryptoStore(db_path), candles.CandleStore(db_path)
@@ -158,8 +160,16 @@ def record_journal(db_path, now: datetime | None = None) -> int:
              "xtb_crypto": set(), "news": {}}
     rows, _ = webapp.build_crypto_rows(cdata, {"history": "1"})
     rows = [r for r in rows if r.get("origin") == "backfill"]
-    paths = store.paths([r["id"] for r in rows])
     journal = strategy.Journal(db_path)
     catalog = [(k, p) for k, _, _, p in strategy.PRESETS] + [(f"c{s['id']}", s["params"]) for s in cstore.strategies()]
-    return sum(journal.record(key, params, strategy.backtest(rows, {}, params, now, paths=paths)["trades"],
+    if only_missing:
+        ids = {r["id"] for r in rows}
+        have = {(j["strategy"], j["version"]) for j in journal.rows() if j["event_id"] in ids}
+        catalog = [(k, p) for k, p in catalog if (k, strategy.version(p)) not in have]
+    matched = {k: [r for r in rows if strategy.matches(r, p)] for k, p in catalog}
+    needed = sorted({r["id"] for rs in matched.values() for r in rs})
+    if not needed:
+        return 0
+    paths = store.paths(needed)   # minute candles are heavy: load only what the strategies use
+    return sum(journal.record(key, params, strategy.backtest(matched[key], {}, params, now, paths=paths)["trades"],
                               lambda t: True) for key, params in catalog)

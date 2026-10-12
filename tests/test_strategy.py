@@ -83,3 +83,49 @@ def test_form_roundtrip_in_human_units():
 def test_local_time_is_cest():
     assert crypto.local("2026-10-09T15:43:53Z") == "2026-10-09 17:43 CEST"
     assert crypto.local("2026-11-09T15:43:53Z") == "2026-11-09 16:43 CET"
+
+
+def candles(*bars):
+    """(minute, open, high, low, close) -> candle path."""
+    return [(crypto.iso(T0 + timedelta(minutes=m)), o, h, low, c) for m, o, h, low, c in bars]
+
+
+SHORT = {"side": "short", "tp": 0.10, "sl": 0.05}
+
+
+def test_short_takes_profit_when_the_price_falls():
+    t = strategy.simulate(row(), candles((1, 1.0, 1.02, 0.97, 0.98), (2, 0.98, 0.99, 0.85, 0.88)), SHORT, LATER, fee=0.005)
+    assert t["reason"] == "take-profit" and t["exit"] == pytest.approx(0.90)
+    assert t["net"] == pytest.approx(0.10 - 0.005)
+
+
+def test_short_stops_out_when_the_price_rises_and_gaps_fill_at_open():
+    t = strategy.simulate(row(), candles((1, 1.0, 1.03, 0.99, 1.02), (2, 1.08, 1.10, 1.07, 1.09)), SHORT, LATER, fee=0)
+    assert t["reason"] == "stop-loss" and t["exit"] == pytest.approx(1.08) and t["gross"] == pytest.approx(-0.08)
+
+
+def test_short_with_both_levels_in_one_candle_counts_the_stop():
+    t = strategy.simulate(row(), candles((1, 1.0, 1.06, 0.85, 0.9),), SHORT, LATER, fee=0)
+    assert t["reason"] == "stop-loss"
+
+
+def test_open_short_is_marked_to_market_and_levels_mirror():
+    t = strategy.simulate(row(), candles((1, 1.0, 1.01, 0.95, 0.96),), SHORT, T0 + timedelta(minutes=5), fee=0)
+    assert t["status"] == "open" and t["gross"] == pytest.approx(0.04)
+    assert strategy.levels(2.0, SHORT) == (pytest.approx(1.8), pytest.approx(2.1))
+    assert "SHORT" in strategy.describe(SHORT) and "TP −10% · SL +5% · max 24 h" in strategy.describe(SHORT)
+
+
+def test_adding_the_side_keeps_old_journal_versions():
+    import hashlib
+    import json
+    old_defaults = {k: v for k, v in strategy.DEFAULTS.items() if k != "side"}
+    params = {"triggers": ["volume"], "tp": 0.12}
+    before = hashlib.sha1(json.dumps({**old_defaults, **params}, sort_keys=True).encode()).hexdigest()[:8]
+    assert strategy.version(params) == before
+    assert strategy.version({**params, "side": "short"}) != before
+
+
+def test_side_from_the_editor_form():
+    assert strategy.params_from_form(MultiDict({"side": "short", "tp": "8"})) == {"side": "short", "tp": 0.08}
+    assert "side" not in strategy.params_from_form(MultiDict({"side": "long"}))

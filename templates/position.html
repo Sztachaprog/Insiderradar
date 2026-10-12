@@ -24,8 +24,9 @@
     </div>
     <div class="facts">
       <div><small>Wejście</small><b>{{ t.entry|usd }}</b><span class="sub">{{ t.entry_at|local("%d.%m %H:%M") }}</span></div>
-      <div><small>Take-profit (+{{ "%g"|format(t.full.tp * 100) }}%)</small><b class="up">{{ t.tp_price|usd }}</b></div>
-      <div><small>Stop-loss (−{{ "%g"|format(t.full.sl * 100) }}%)</small><b class="down">{{ t.sl_price|usd }}</b></div>
+      {% set short = t.side == 'short' %}
+      <div><small>Take-profit ({{ '−' if short else '+' }}{{ "%g"|format(t.full.tp * 100) }}%)</small><b class="up">{{ t.tp_price|usd }}</b></div>
+      <div><small>Stop-loss ({{ '+' if short else '−' }}{{ "%g"|format(t.full.sl * 100) }}%)</small><b class="down">{{ t.sl_price|usd }}</b></div>
       <div><small>{{ 'Wyjście' if t.exit_at else 'Koniec najpóźniej' }}</small><b>{{ t.exit|usd if t.exit else (t.now_price|usd if t.now_price else '—') }}</b>
         <span class="sub">{{ (t.exit_at or t.deadline)|local("%d.%m %H:%M") }}</span></div>
       <div><small>Najwyżej / najniżej w trakcie</small><b><span class="up">{{ t.peak|pct }}</span> / <span class="down">{{ t.trough|pct }}</span></b></div>

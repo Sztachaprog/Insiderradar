@@ -80,7 +80,7 @@
               <td class="mono" data-sort="{{ row.detected_at }}">{{ row.detected_at|local("%H:%M") }}</td>
               <td class="num">{{ t.entry|usd }}</td>
               <td class="num {{ ('up' if t.gross >= 0 else 'down') if t.gross is not none }}">{{ t.gross|pct }}</td>
-              <td class="num">{{ (t.entry * (1 + (selected.full.tp)))|usd }}<span class="sub">{{ (t.entry * (1 - (selected.full.sl)))|usd }}</span></td>
+              <td class="num">{{ t.tp_price|usd }}<span class="sub">{{ t.sl_price|usd }}</span></td>
             </tr>
           {% endfor %}
           </tbody>
@@ -113,6 +113,7 @@
         <label>Zmiana 24h maks. %<input type="text" name="max_ch24" value="{{ form.max_ch24 }}" placeholder="np. 15"></label>
         <label>Wolumen / kap. min.<input type="text" name="min_vol" value="{{ form.min_vol }}" placeholder="np. 0.6"></label>
         <label>Wolumen / kap. maks.<input type="text" name="max_vol" value="{{ form.max_vol }}" placeholder="np. 2"></label>
+        <label>Kierunek<select name="side">{% for key, label in sides.items() %}<option value="{{ key }}" {% if form.side == key %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
         <label>Take-profit %<input type="text" name="tp" value="{{ form.tp }}"></label>
         <label>Stop-loss %<input type="text" name="sl" value="{{ form.sl }}"></label>
         <label>Maks. czas trzymania (h)<input type="text" name="hold_h" value="{{ form.hold_h }}"></label>
@@ -146,7 +147,7 @@
   // "Save" uses the rules currently in the editor.
   document.getElementById("save").addEventListener("submit", e => {
     const form = e.target;
-    for (const el of document.querySelectorAll("#editor input")) {
+    for (const el of document.querySelectorAll("#editor input, #editor select")) {
       if (["custom", "s", "fee", "stake"].includes(el.name) || (el.type === "checkbox" && !el.checked)) continue;
       const h = document.createElement("input"); h.type = "hidden"; h.name = el.name; h.value = el.value; form.appendChild(h);
     }
