@@ -19,7 +19,7 @@ import threading
 import time
 from collections import defaultdict
 from dataclasses import asdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, url_for
@@ -31,6 +31,7 @@ import form4_scanner as fs
 import history
 import market
 import signals
+import ict
 import portfolio
 import safety
 import search
@@ -860,7 +861,8 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         return [("strategies", "Strategie", url_for("crypto_strategies")),
                 ("open", "Otwarte pozycje", url_for("strategy_open")),
                 ("history", "Historia transakcji", url_for("strategy_history")),
-                ("search", "Szukanie strategii", url_for("strategy_search"))], active
+                ("search", "Szukanie strategii", url_for("strategy_search")),
+                ("ict", "Strategia ICT (BTC)", url_for("strategy_ict"))], active
 
     @app.get("/krypto/strategie/otwarte")
     def strategy_open():
@@ -905,7 +907,13 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         for t in positions:
             t["url"] = url_for("position", key=t["strategy_key"], event_id=t["event_id"])
         created = {f"c{s['id']}": s["created_at"] for s in cstore.strategies()}
-        trades = portfolio.collect(stock_rows, radar, wtokens, positions, created, now)
+        bars = ict.BarStore(store.path).bars()
+        ict_trades = {k: (n, [t for t in ict.backtest(bars, p, now) if t["day"] >= ict.LIVE_SINCE])
+                      for k, n, _, p in ict.PRESETS}
+        for _, (_, ts) in ict_trades.items():
+            for t in ts:
+                t["url"] = url_for("strategy_ict")
+        trades = portfolio.collect(stock_rows, radar, wtokens, positions, created, now, ict_trades)
         # Strategies to choose from, with their live record so far.
         names = [(k, n, p) for k, n, _, p in strategy.PRESETS if k not in strategy.REFERENCE_ONLY] + \
                 [(f"c{s['id']}", s["name"], s["params"]) for s in cstore.strategies()]
@@ -914,10 +922,32 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
             done = [t["ret"] for t in trades if t["b"] == "lev" and t["src"] == key and t["out"]]
             strategies.append({"key": key, "name": name, "side": {**strategy.DEFAULTS, **params}["side"],
                                "n": len(done), "avg": sum(done) / len(done) if done else None})
-        # Default: every strategy except the deliberate loser kept as a control.
-        defaults = {**portfolio.DEFAULTS, "strategies": [s["key"] for s in strategies if s["key"] != "chase"]}
+        for key, name, _, _ in ict.PRESETS:
+            done = [t["ret"] for t in trades if t["b"] == "lev" and t["src"] == key and t["out"]]
+            strategies.append({"key": key, "name": name, "side": "long/short", "n": len(done),
+                               "avg": sum(done) / len(done) if done else None})
+        # Default: every radar strategy except the deliberate loser kept as a control; the BTC session
+        # model is opt-in (its 2-year test lost after costs).
+        defaults = {**portfolio.DEFAULTS, "strategies": [s["key"] for s in strategies
+                                                         if s["key"] != "chase" and not s["key"].startswith("ict_")]}
         return render_template("portfolio.html", trades=trades, defaults=defaults, strategies=strategies,
                                now=crypto.iso(now), max_lev=strategy.LEVERAGE, **common(page="portfolio"))
+
+    @app.get("/krypto/strategie/ict")
+    def strategy_ict():
+        now = crypto.utcnow()
+        bars = ict.BarStore(store.path).bars()
+        models = []
+        for key, name, desc, params in ict.PRESETS:
+            trades = ict.backtest(bars, params, now)
+            live = [t for t in trades if t["day"] >= ict.LIVE_SINCE]
+            models.append({"key": key, "name": name, "desc": desc, "all": ict.summarize(trades),
+                           "live": ict.summarize(live), "recent": trades[-25:][::-1]})
+        first = datetime.fromtimestamp(bars[0][0], timezone.utc).date().isoformat() if bars else None
+        tabs, active = strategy_tabs("ict")
+        return render_template("ict.html", models=models, first=first, bars=len(bars), live_since=ict.LIVE_SINCE,
+                               fee=ict.FEE, leverage=strategy.LEVERAGE, tabs=tabs, active=active,
+                               weekdays=["pon", "wt", "śr", "czw", "pt", "sob", "nd"], **common(page="strategies"))
 
     @app.get("/krypto/strategie/szukanie")
     def strategy_search():

@@ -83,7 +83,7 @@ def random_trades(seed):
         closed = rnd.random() < 0.7
         out.append(trade(b, h, h + rnd.uniform(1, 200) if closed else None, rnd.gauss(0.005, 0.08),
                          sym=rnd.choice("ABCDEFGH"), src=rnd.choice(["s1", "s2", "whales", "radar"]),
-                         sl=rnd.choice([0.05, 0.07, 0.1, 0.2]) if b == "lev" else None, score=rnd.randint(0, 100)))
+                         sl=rnd.choice([0.004, 0.05, 0.07, 0.1, 0.2]) if b == "lev" else None, score=rnd.randint(0, 100)))
     out.sort(key=lambda t: (t["in"], t["b"], t["src"], t["sym"]))
     return out
 
@@ -111,3 +111,9 @@ def test_browser_simulation_matches_python(seed):
                 assert js["buckets"][b][k] == (pytest.approx(v) if v is not None else None), (b, k)
     assert [(p["sym"], p["in"]) for p in py["closed"]] == [(p["sym"], p["in"]) for p in js["closed"]]
     assert [p["pnl"] for p in js["open"]] == pytest.approx([p["pnl"] for p in py["open"]])
+
+
+def test_a_tight_stop_never_exceeds_the_leverage():
+    r = portfolio.simulate([trade("lev", 0, 5, 0.01, sl=0.002)], {"capital": 10000, "lev": 3}, NOW)
+    (t,) = r["closed"]                         # 2% risk / 0.2% stop would be 10x the bucket: capped at 3x
+    assert t["size"] == pytest.approx(3000 * 3) and t["margin"] == pytest.approx(3000)

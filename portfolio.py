@@ -13,7 +13,7 @@ Trade: {"b": bucket, "src": source key, "name": source name, "sym": symbol, "in"
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import crypto
 import strategy
@@ -36,9 +36,17 @@ DEFAULTS = {
 
 
 def collect(stock_rows: list[dict], radar_rows: list[dict], whale_tokens: list[dict],
-            lev_positions: list[dict], created: dict[str, str], now) -> list[dict]:
-    """created: saved strategy key -> creation time (their live record starts there)."""
+            lev_positions: list[dict], created: dict[str, str], now, ict_trades: dict | None = None) -> list[dict]:
+    """created: saved strategy key -> creation time (their live record starts there).
+    ict_trades: BTC session model key -> (name, trades), only those since it went live."""
     out = []
+    for key, (name, trades) in (ict_trades or {}).items():
+        for t in trades:
+            if t["ret"] is None:
+                continue
+            out.append({"b": "lev", "src": key, "name": name, "sym": "BTC", "in": crypto.iso(_utc(t["entry_ts"])),
+                        "out": crypto.iso(_utc(t["exit_ts"])) if t["exit_ts"] else None, "ret": t["ret"],
+                        "sl": t["risk"], "score": None, "url": t.get("url", "")})
     for r in stock_rows:
         perf, base_date = r.get("perf"), r.get("base_date")
         if not perf or not base_date or perf.get("now") is None:
@@ -80,6 +88,10 @@ def collect(stock_rows: list[dict], radar_rows: list[dict], whale_tokens: list[d
     return out
 
 
+def _utc(ts: int):
+    return datetime.fromtimestamp(ts, timezone.utc)
+
+
 def _allowed(t: dict, s: dict) -> bool:
     if t["ret"] is None or t["in"] < s["start"]:
         return False
@@ -93,7 +105,8 @@ def _allowed(t: dict, s: dict) -> bool:
 def simulate(trades: list[dict], settings: dict, now_iso: str) -> dict:
     """Run every bucket through its trades in time order. Leveraged: the position is sized so a stop
     loses `risk`% of the bucket, margin = position / leverage, a loss never exceeds the margin
-    (liquidation), one position per token. Stocks / spot: equal slots of bucket / maxPos.
+    (liquidation), one position per token, and no position above the whole bucket times the leverage
+    (with a very tight stop the risk taken is then smaller than asked). Stocks / spot: equal slots of bucket / maxPos.
     A signal that finds no free money (or slot) is skipped, as it would be for real."""
     s = {**DEFAULTS, **settings}
     result = {"buckets": {}, "open": [], "closed": []}
@@ -118,7 +131,7 @@ def simulate(trades: list[dict], settings: dict, now_iso: str) -> dict:
                 if any(p["sym"] == t["sym"] for p in open_):
                     skipped += 1
                     continue
-                size = equity * s["risk"] / 100 / t["sl"]
+                size = min(equity * s["risk"] / 100 / t["sl"], equity * s["lev"])   # a tight stop can't exceed the leverage
                 margin = size / s["lev"]
                 pnl = max(size * t["ret"], -margin)
             else:

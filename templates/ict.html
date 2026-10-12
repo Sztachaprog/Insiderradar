@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Strategia ICT (BTC) · Strategie lev{% endblock %}
+{% block content %}
+  {% include "_tabs.html" %}
+  <section class="card section">
+    <h2>Model sesji londyńskiej w stylu ICT („Smart Money”)</h2>
+    <p class="muted" style="margin:0 0 10px; max-width: 980px">Na podstawie filmu
+      <a href="https://www.youtube.com/watch?v=wIbRsQvIeBs" target="_blank" rel="noopener">„BITCOIN - SKUTECZNA STRATEGIA DAY-TRADINGOWA (BACKTEST)”</a>
+      (kanał XPreay) i slajdów autora. Autor gra ją częściowo „na oko”; tu jest jej mechaniczny rdzeń, sprawdzony na 5-minutowych świecach BTC z Binance.</p>
+    <ol style="margin:0 0 0 18px; padding:0; line-height:1.6; max-width: 980px">
+      <li><b>Sesja azjatycka:</b> najwyższa i najniższa cena między 19:00 a 24:00 czasu nowojorskiego.</li>
+      <li><b>Zebranie płynności</b> między 01:00 a 05:00 NY (otwarcie Londynu): cena przebija szczyt sesji azjatyckiej (szukamy shorta) albo jej dołek (szukamy longa).</li>
+      <li><b>Zmiana struktury (MSS)</b> na świecach 5M: świeca zamyka się korpusem za ostatnim dołkiem (short) lub szczytem (long) sprzed skrajnego punktu ruchu. Wejście po jej zamknięciu.</li>
+      <li><b>Stop-loss</b> na skraju ruchu manipulacyjnego, <b>take-profit 1:2</b> (dwa razy ryzyko). Co nie zamknie się do 16:00 NY, zamykamy po cenie rynkowej.</li>
+      <li>Jedna transakcja dziennie. Koszt: {{ "%g"|format(fee * 100) }}% od pozycji (opłaty i poślizg na kontraktach BTC).</li>
+    </ol>
+    <p class="muted" style="font-size:12.5px; margin:10px 0 0">Wyniki liczę w <b>R</b>, czyli w wielokrotnościach ryzyka, tak jak autor: +2 R to trafiony TP, −1 R to stop (plus koszty).
+      Przy ryzyku 1% kapitału na transakcję 1 R = 1% kapitału. Dane: {{ bars }} świec 5M od {{ first or "—" }}. Na żywo liczy się od {{ live_since }}.</p>
+  </section>
+
+  {% if not bars %}
+  <section class="card section"><p class="muted">Świece BTC jeszcze się pobierają (2 lata historii schodzi w kilku skanach).</p></section>
+  {% else %}
+  <section class="card table-wrap" style="margin-bottom:16px">
+    <table>
+      <thead><tr><th>Wariant</th><th class="num">Transakcje</th><th class="num">Trafność</th><th class="num">Śr. wynik</th>
+        <th class="num">Suma</th><th class="num">Max obsunięcie</th><th class="num">Najdłuższa seria strat</th><th class="num">Na żywo</th></tr></thead>
+      <tbody>
+      {% for m in models %}{% set a, l = m.all, m.live %}
+        <tr>
+          <td style="white-space:normal; min-width:240px"><b>{{ m.name }}</b><span class="sub">{{ m.desc }}</span></td>
+          <td class="num">{{ a.n }}<span class="sub">long {{ a.longs }} · short {{ a.shorts }}</span></td>
+          <td class="num">{{ a.win_rate|pct(false) }}<span class="sub">próg zera przy 1:2: 33%</span></td>
+          <td class="num">{% if a.avg_r is not none %}<b class="{{ 'up' if a.avg_r >= 0 else 'down' }}">{{ "%+.2f"|format(a.avg_r) }} R</b>
+            <span class="sub">{{ "%+.2f"|format(a.avg_ret * 100) }}% ceny · SL śr. {{ "%.2f"|format(a.avg_risk * 100) }}%</span>{% else %}—{% endif %}</td>
+          <td class="num"><b class="{{ 'up' if a.total_r >= 0 else 'down' }}">{{ "%+.1f"|format(a.total_r) }} R</b></td>
+          <td class="num down">{{ "%.1f"|format(a.max_dd_r) }} R</td>
+          <td class="num">{{ a.worst_streak }}</td>
+          <td class="num">{% if l.n %}<b class="{{ 'up' if l.total_r >= 0 else 'down' }}">{{ "%+.1f"|format(l.total_r) }} R</b><span class="sub">{{ l.n }} transakcji</span>
+            {% else %}<span class="muted">jeszcze brak</span>{% endif %}{% if l.open %}<span class="sub">otwarta teraz</span>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  {% set m = models[0] %}
+  <div class="grid2">
+    <section class="card section">
+      <h2>{{ m.name }}: wynik narastająco</h2>
+      <p class="note">Suma R po kolei transakcji. Linia rosnąca w prawo oznacza przewagę.</p>
+      <div class="chart-box"><canvas id="curve"></canvas></div>
+    </section>
+    <section class="card section">
+      <h2>Wynik według dnia tygodnia</h2>
+      <table><thead><tr><th>Dzień</th><th class="num">Transakcje</th><th class="num">Śr. wynik</th></tr></thead><tbody>
+      {% for wd, (n, avg) in models[1].all.by_weekday.items() %}
+        <tr><td>{{ weekdays[wd] }}</td><td class="num">{{ n }}</td><td class="num {{ 'up' if avg >= 0 else 'down' }}">{{ "%+.2f"|format(avg) }} R</td></tr>
+      {% endfor %}</tbody></table>
+      <p class="muted" style="font-size:12.5px">Wariant pon–pt. Autor wskazuje wtorek–czwartek jako najlepsze dni.</p>
+    </section>
+  </div>
+
+  <section class="card section table-wrap">
+    <h2>Ostatnie transakcje: {{ m.name }}</h2>
+    <table><thead><tr><th>Dzień</th><th>Kierunek</th><th class="num">Wejście</th><th class="num">SL / TP</th><th>Wyjście</th><th class="num">Wynik</th></tr></thead><tbody>
+    {% for t in m.recent %}
+      <tr><td class="mono">{{ t.day }}</td><td>{{ 'short' if t.side == 'short' else 'long' }}</td>
+        <td class="num">{{ t.entry|usd }}<span class="sub">ryzyko {{ "%.2f"|format(t.risk * 100) }}%</span></td>
+        <td class="num">{{ t.stop|usd }}<span class="sub">{{ t.target|usd }}</span></td>
+        <td>{{ t.reason or 'otwarta' }}</td>
+        <td class="num">{% if t.r is not none %}<b class="{{ 'up' if t.r >= 0 else 'down' }}">{{ "%+.2f"|format(t.r) }} R</b>{% else %}—{% endif %}</td></tr>
+    {% endfor %}</tbody></table>
+  </section>
+  {% endif %}
+{% endblock %}
+{% block scripts %}
+{% if models and models[0].all.curve %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const pts = {{ models[0].all.curve|tojson }};
+  new Chart(document.getElementById("curve"), {
+    type: "line", data: { datasets: [{ data: pts.map(p => ({ x: p[0] * 1000, y: p[1] })), borderColor: css("--blue"), borderWidth: 2, pointRadius: 0, stepped: true }] },
+    options: { maintainAspectRatio: false, plugins: { legend: { display: false } },
+      scales: { x: { type: "linear", grid: { display: false }, ticks: { color: css("--muted"), maxTicksLimit: 6, callback: v => new Date(v).toLocaleDateString("pl-PL", { month: "2-digit", year: "2-digit" }) } },
+                y: { grid: { color: css("--line") }, border: { display: false }, ticks: { color: css("--muted"), callback: v => v + " R" } } } },
+  });
+</script>
+{% endif %}
+{% endblock %}

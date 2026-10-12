@@ -32,7 +32,7 @@ function simulatePortfolio(trades, settings, nowIso, defaults) {
       let size, margin, pnl;
       if (b === "lev") {
         if (open.some(p => p.sym === t.sym)) { skipped += 1; continue; }
-        size = equity * s.risk / 100 / t.sl;
+        size = Math.min(equity * s.risk / 100 / t.sl, equity * s.lev);
         margin = size / s.lev;
         pnl = Math.max(size * t.ret, -margin);
       } else {
