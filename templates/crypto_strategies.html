@@ -17,6 +17,8 @@
     Wynik liczę na <b>świecach minutowych</b> (Binance albo GeckoTerminal): TP padł, jeśli najwyższa cena świecy go dotknęła, a SL, jeśli najniższa.
     Gdy w jednej świecy mieszczą się oba, liczę SL (ostrożnie). Dla tokenów bez źródła świec zostają zdjęcia cen co skan.
     Każda transakcja trafia do <b>dziennika</b>. Gdy jest zamknięta i policzona na świecach, już się nie zmienia, nawet po zmianie reguł.</p>
+  <p class="muted" style="margin:0 0 14px; max-width: 980px"><b>Wyniki w tabeli to tylko transakcje na żywo</b>, czyli z sygnałów wykrytych przez radar od jego startu.
+    Ostatnia kolumna to <b>test na historii</b>: te same reguły na sygnałach odtworzonych z 2 miesięcy danych Binance. Strategia jest wiarygodna, gdy wychodzi na plus w obu.</p>
 
 {% if not static %}
   <form class="filters card" method="get" style="grid-template-columns: repeat(auto-fit, minmax(160px, 220px))">
@@ -32,13 +34,13 @@
   <section class="card table-wrap" style="margin-bottom:16px">
     <table>
       <thead><tr><th>Strategia</th><th class="num">Transakcje</th><th class="num">Otwarte</th><th class="num">Trafność</th>
-        <th class="num">Śr. wynik netto</th><th class="num">Profit factor</th><th class="num">Wynik $</th><th class="num">Max obsunięcie $</th><th class="num">TP / SL</th></tr></thead>
+        <th class="num">Śr. wynik netto</th><th class="num">Profit factor</th><th class="num">Wynik $</th><th class="num">Max obsunięcie $</th><th class="num">TP / SL</th><th class="num">Test na historii</th></tr></thead>
       <tbody>
-      {% for s in catalog %}{% set r = s.result %}
+      {% for s in catalog %}{% set r = s.live %}{% set h = s.hist %}
         <tr class="{{ 'sel' if s.key == selected.key }}" onclick="location.href='{{ url_for('crypto_strategies', s=s.key, fee=fee * 100, stake=stake, **({'custom': 1} if s.key == 'custom' else {})) }}'">
           <td style="white-space:normal; min-width:260px"><span class="name">{{ s.name }}</span>{% if s.saved %} <span class="chip pill-ok">zapisana</span>{% endif %}
             <div class="rules">{% for rule in s.rules %}<span class="chip">{{ rule }}</span>{% endfor %}</div></td>
-          <td class="num">{{ r.closed }}{% if s.hist_closed %}<span class="sub">w tym historia {{ s.hist_closed }}</span>{% endif %}{% if r.no_data %}<span class="sub" title="brak cen w chwili wyjścia">+{{ r.no_data }} bez danych</span>{% endif %}</td>
+          <td class="num">{{ r.closed }}{% if r.closed < small_sample %}<span class="sub" title="za mało transakcji, żeby ufać wynikowi">mała próba</span>{% endif %}{% if r.no_data %}<span class="sub" title="brak cen w chwili wyjścia">+{{ r.no_data }} bez danych</span>{% endif %}</td>
           <td class="num">{{ r.open }}</td>
           <td class="num">{{ r.win_rate|pct(false) }}</td>
           <td class="num {{ ('up' if r.avg >= 0 else 'down') if r.avg is not none }}">{{ r.avg|pct }}</td>
@@ -47,17 +49,19 @@
             {% if r.open %}<span class="sub">otwarte {{ "%+.2f"|format(r.open_pnl) }}</span>{% endif %}</td>
           <td class="num down">{{ "%.2f"|format(r.max_dd) }}</td>
           <td class="num">{{ r.tp_hits }} / {{ r.sl_hits }}</td>
+          <td class="num">{% if h.closed %}<b class="{{ 'up' if h.avg >= 0 else 'down' }}">{{ h.avg|pct }}</b>
+            <span class="sub">{{ h.closed }} transakcji · trafność {{ h.win_rate|pct(false) }}</span>{% else %}—{% endif %}</td>
         </tr>
       {% endfor %}
       </tbody>
     </table>
   </section>
 
-  {% set r = selected.result %}
+  {% set r = selected.live %}
   <div class="grid2">
     <section class="card section">
       <h2>{{ selected.name }}: krzywa kapitału</h2>
-      <p class="note">{{ selected.desc }} Zysk narastająco w $ przy stawce {{ '%g'|format(stake) }} $ na transakcję, w kolejności zamknięcia transakcji.</p>
+      <p class="note">{{ selected.desc }} Zysk narastająco w $ z transakcji na żywo, przy stawce {{ '%g'|format(stake) }} $ na transakcję, w kolejności zamknięcia transakcji.</p>
       {% if r.curve %}
         <div class="legend"><span style="--c: var(--blue)">{{ selected.name }}</span>{% if selected.key != 'all' %}<span class="dash" style="--c: var(--pink)">Wszystko (punkt odniesienia)</span>{% endif %}</div>
         <div class="chart-box"><canvas id="equity"></canvas></div>
@@ -148,13 +152,13 @@
     }
   });
 </script>
-{% set r = selected.result %}{% if r.curve %}
+{% set r = selected.live %}{% if r.curve %}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script>
   const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   const fmt = ts => new Date(ts).toLocaleString("pl-PL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
   const sel = {{ r.curve|tojson }};
-  const base = {{ (catalog[0].result.curve if selected.key != 'all' else [])|tojson }};
+  const base = {{ (catalog[0].live.curve if selected.key != 'all' else [])|tojson }};
   const ds = [{ label: {{ selected.name|tojson }}, data: sel.map(p => ({ x: Date.parse(p[0]), y: p[1] })), borderColor: css("--blue"),
                 borderWidth: 2, stepped: true, pointRadius: 0, pointHoverRadius: 5 }];
   if (base.length) ds.push({ label: "Wszystko", data: base.map(p => ({ x: Date.parse(p[0]), y: p[1] })), borderColor: css("--pink"),

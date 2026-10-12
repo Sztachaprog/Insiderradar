@@ -311,3 +311,13 @@ def test_position_pages(client, tmp_path):
     page = client.get(f"/krypto/pozycja/{key}/{moon['id']}").get_data(as_text=True)
     assert "Przebieg pozycji" in page and "newsy i szczegóły" in page
     assert client.get("/krypto/pozycja/nope/1").status_code == 404
+
+
+def test_strategy_results_keep_history_apart_from_live(client, tmp_path):
+    cstore = crypto.CryptoStore(tmp_path / "t.db")
+    then = crypto.utcnow() - timedelta(days=40)
+    cstore.add_event(coin("old", price=1.0), ["pump24"], then, origin="backfill")   # replayed from Binance history
+    cstore.save_prices("old", [(crypto.iso(then + timedelta(hours=h)), p) for h, p in [(0, 1.0), (2, 1.2)]])
+    html = client.get("/krypto/strategie").get_data(as_text=True)
+    assert "Test na historii" in html and "1 transakcji · trafność 100%" in html   # the replayed winner
+    assert "mała próba" in html                                                     # two live trades only

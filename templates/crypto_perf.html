@@ -24,14 +24,15 @@
       <div class="row"><span>vs BTC po 24 h</span><b>{{ (h24.alpha if h24 else none)|pct }}</b></div>
     </a>
     <a class="card" href="{{ url_for('crypto_strategies', s=best.key) if best else url_for('crypto_strategies') }}">
-      <h3>Strategie lev</h3><span class="muted" style="font-size:12.5px">symulacja transakcji po kosztach, $100 na transakcję</span>
+      <h3>Strategie lev</h3><span class="muted" style="font-size:12.5px">transakcje na żywo po kosztach, $100 na transakcję</span>
       {% if best %}
-        <div class="big {{ 'up' if best.result.pnl >= 0 else 'down' }}">{{ "%+.0f"|format(best.result.pnl) }} $</div>
-        <span class="muted" style="font-size:12px">najlepsza: {{ best.name }}</span>
-        <div class="row"><span>transakcji / trafność</span><b>{{ best.result.closed }} / {{ best.result.win_rate|pct(false) }}</b></div>
-        <div class="row"><span>śr. wynik netto</span><b>{{ best.result.avg|pct }}</b></div>
-        {% set closed = strategies|selectattr('result.closed')|list %}
-        <div class="row"><span>strategii na plusie</span><b>{{ closed|selectattr('result.pnl', 'gt', 0)|list|length }} / {{ closed|length }}</b></div>
+        <div class="big {{ 'up' if best.live.pnl >= 0 else 'down' }}">{{ "%+.0f"|format(best.live.pnl) }} $</div>
+        <span class="muted" style="font-size:12px">najlepsza na żywo: {{ best.name }}</span>
+        <div class="row"><span>transakcji / trafność</span><b>{{ best.live.closed }} / {{ best.live.win_rate|pct(false) }}</b></div>
+        <div class="row"><span>śr. wynik netto</span><b>{{ best.live.avg|pct }}</b></div>
+        <div class="row"><span>ta sama na historii (2 mies.)</span><b>{{ best.hist.avg|pct }}</b></div>
+        {% set closed = strategies|rejectattr('key', 'in', ['all'])|selectattr('live.closed')|list %}
+        <div class="row"><span>strategii na plusie na żywo</span><b>{{ closed|selectattr('live.pnl', 'gt', 0)|list|length }} / {{ closed|length }}</b></div>
       {% else %}<div class="big muted">—</div><span class="muted" style="font-size:12px">brak zamkniętych transakcji</span>{% endif %}
     </a>
     <a class="card" href="{{ url_for('whales_open') }}">

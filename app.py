@@ -44,6 +44,8 @@ WHALES_DB_PATH = Path(os.environ["WHALES_DB"]) if os.environ.get("WHALES_DB") el
 SCAN_PAGES = int(os.environ.get("SCAN_PAGES", "3"))
 SCAN_INTERVAL_MIN = int(os.environ.get("SCAN_INTERVAL_MIN", "15"))
 TRACK_DAYS = int(os.environ.get("TRACK_DAYS", "120"))  # keep refreshing prices this long after adding
+MIN_SAMPLE = 10      # closed live trades before a strategy can be called the best one
+SMALL_SAMPLE = 20    # below this many closed trades a result is flagged as a small sample
 BENCHMARK = "SPY"
 HISTORY_DAYS = 7          # re-check an insider's track record weekly
 XTB_PER_RUN = int(os.environ.get("XTB_PER_RUN", "20"))  # new tickers matched to XTB per scan
@@ -744,8 +746,10 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
                 s["result"] = strategy.summarize(strategy.journal_trades(jrows, events), stake)
             else:
                 s["result"] = strategy.backtest(rows, prices, s["params"], now, fee, stake, paths())
-            closed = [t for t in s["result"]["trades"] if t["status"] == "closed"]
-            s["hist_closed"] = sum(t["row"].get("origin") == "backfill" for t in closed)
+            # Live trades are the real test; the 2-month Binance replay is shown separately for context.
+            trades = s["result"]["trades"]
+            s["live"] = strategy.summarize([t for t in trades if t["row"].get("origin", "live") != "backfill"], stake)
+            s["hist"] = strategy.summarize([t for t in trades if t["row"].get("origin") == "backfill"], stake)
             s["rules"] = strategy.describe(s["params"])
             s["full"] = {**strategy.DEFAULTS, **s["params"]}
         return catalog
@@ -758,7 +762,9 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         # Summary of every crypto section: spot radar (above), leveraged strategies, whale spot signals.
         all_rows, _ = build_crypto_rows(cd, {"history": "1"})
         strategies = strategy_catalog(all_rows, cd["prices"], crypto.utcnow())
-        ranked = sorted((s for s in strategies if s["result"]["closed"]), key=lambda s: -s["result"]["pnl"])
+        # "Best" needs a real sample: a couple of lucky trades must not top the summary.
+        ranked = sorted((s for s in strategies if s["live"]["closed"] >= MIN_SAMPLE
+                         and s["key"] not in strategy.REFERENCE_ONLY), key=lambda s: -s["live"]["pnl"])
         wdata = whale_xtb(whales.build(wstore))
         wsignals = sorted((t for t in wdata["tokens"] if t.get("signal")),
                           key=lambda t: t["signal"]["flagged_at"], reverse=True)
@@ -806,7 +812,7 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
                       if t["status"] == "open" and crypto.parse_iso(t["entry_at"]) >= fresh]
         tabs, active = strategy_tabs("strategies")
         return render_template("crypto_strategies.html", catalog=catalog, selected=selected, tabs=tabs, active=active,
-                               candidates=candidates, fee=fee, stake=stake,
+                               candidates=candidates, fee=fee, stake=stake, small_sample=SMALL_SAMPLE,
                                form=strategy.form_values(selected["params"]),
                                trigger_labels=crypto.TRIGGER_LABELS, **common(page="strategies"))
 
