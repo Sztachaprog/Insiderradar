@@ -3,10 +3,13 @@
 {% block content %}
   {% include "_tabs.html" %}
   <p class="muted" style="margin:0 0 10px; max-width: 980px">Program sam sprawdza tysiące kombinacji reguł: typ ruchu, kapitalizację, zmianę 24h, ocenę, wolumen,
-    kierunek (long albo short), take-profit, stop-loss i czas trzymania. Wszystko liczy na tych samych świecach i z tymi samymi kosztami co tabela strategii.</p>
+    kierunek (long albo short), take-profit, stop-loss (najwyżej {{ "%g"|format(max_sl * 100) }}%, żeby przy dźwigni {{ leverage }}× stop zawsze zadziałał przed likwidacją)
+    i czas trzymania. Wszystko liczy na tych samych świecach i z tymi samymi kosztami co tabela strategii.
+    Reguły są oceniane według <b>zysku na jednostkę ryzyka</b> (średni wynik ÷ stop-loss), więc szeroki stop musi zarabiać proporcjonalnie więcej.</p>
   <p class="muted" style="margin:0 0 14px; max-width: 980px"><b>Jak odsiewa przypadek:</b> sygnały są podzielone w czasie. Reguły są wybierane tylko na <b>starszych 60%</b> („wybór”),
     a potem sprawdzane na <b>nowszych 40%</b> („sprawdzian”), których przy wyborze nie widziały. Reguła <b>przechodzi</b>, gdy zarabia w obu częściach,
-    a w sprawdzianie ma co najmniej {{ min_test }} transakcji. Najlepsze, które przeszły, trafiają do śledzenia na żywo jako strategie „Auto” (najwyżej {{ auto_max }} naraz).
+    a w sprawdzianie ma co najmniej {{ min_test }} transakcji. Odpada też, gdy jej najgorsza transakcja przekracza {{ "%g"|format(safe_worst * 100) }}%
+    (cena przeskoczyła stop, przy {{ leverage }}× to prawie likwidacja). Najlepsze, które przeszły, trafiają do śledzenia na żywo jako strategie „Auto” (najwyżej {{ auto_max }} naraz).
     Dopiero wynik na żywo, liczony od dnia dodania, jest ostatecznym testem.</p>
 
 {% if not result %}
@@ -30,11 +33,14 @@
         <tr>
           <td style="white-space:normal; min-width:280px"><div class="rules" style="display:flex; flex-wrap:wrap; gap:4px">{% for rule in r.rules %}<span class="chip">{{ rule }}</span>{% endfor %}</div></td>
           <td class="num"><b class="{{ 'up' if tr.avg >= 0 else 'down' }}">{{ tr.avg|pct }}</b>
-            <span class="sub">{{ tr.n }} transakcji · trafność {{ tr.win_rate|pct(false) }}</span></td>
+            <span class="sub">{{ tr.n }} transakcji · trafność {{ tr.win_rate|pct(false) }}</span>
+            <span class="sub">{{ leverage }}×: {{ (tr.avg * leverage)|pct }} · najgorsza {{ tr.worst|pct }}</span></td>
           <td class="num">{% if te.n %}<b class="{{ 'up' if te.avg >= 0 else 'down' }}">{{ te.avg|pct }}</b>
-            <span class="sub">{{ te.n }} transakcji · trafność {{ te.win_rate|pct(false) }}</span>{% else %}—{% endif %}</td>
+            <span class="sub">{{ te.n }} transakcji · trafność {{ te.win_rate|pct(false) }}</span>
+            <span class="sub">{{ leverage }}×: {{ (te.avg * leverage)|pct }} · najgorsza {{ te.worst|pct }}</span>{% else %}—{% endif %}</td>
           <td>{% if r.tracked %}<a class="chip pill-ok" href="{{ url_for('crypto_strategies', s=r.tracked) }}" style="background:var(--blue-soft); color:var(--blue)">śledzona na żywo ›</a>
               {% elif r.passed %}<span class="chip up">przeszła</span>
+              {% elif r.safe is defined and not r.safe %}<span class="chip down" title="cena przeskoczyła stop: przy dźwigni {{ leverage }}× grozi likwidacją">za ryzykowna</span>
               {% else %}<span class="muted" style="font-size:12.5px">nie przeszła</span>{% endif %}</td>
         </tr>
       {% endfor %}

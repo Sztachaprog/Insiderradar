@@ -129,3 +129,7 @@ def test_adding_the_side_keeps_old_journal_versions():
 def test_side_from_the_editor_form():
     assert strategy.params_from_form(MultiDict({"side": "short", "tp": "8"})) == {"side": "short", "tp": 0.08}
     assert "side" not in strategy.params_from_form(MultiDict({"side": "long"}))
+
+
+def test_editor_caps_the_stop_below_liquidation():
+    assert strategy.params_from_form(MultiDict({"sl": "35"}))["sl"] == strategy.MAX_SL

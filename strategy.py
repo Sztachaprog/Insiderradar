@@ -35,6 +35,8 @@ DEFAULTS = {
 ADDED_LATER = ("side",)
 REFERENCE_ONLY = {"all"}   # baseline "buy every signal": compared against, not listed as positions
 FEE = 0.005      # round trip: ~0.1% exchange fee per side + slippage on small caps
+LEVERAGE = 3     # the most the user trades with: results are also shown per $ of margin at this leverage
+MAX_SL = 0.20    # liquidation at 3x is ~30% away; a wider stop could be beaten to it by a gap
 STAKE = 100      # $ per trade for the equity curve
 
 PRESETS = [
@@ -58,7 +60,7 @@ PRESETS = [
     ("fade_pump", "Short po pompie",
      "Odwrotność gonienia pompy: gra na spadek tokena, który urósł o 25% lub więcej w 24h. "
      "Kupowanie takich ruchów systematycznie traci, więc sprawdzamy, czy zarabia granie przeciwko nim.",
-     {"triggers": ["pump24"], "side": "short", "tp": 0.10, "sl": 0.07}),
+     {"triggers": ["pump24"], "side": "short", "tp": 0.10, "sl": 0.10}),
 ]
 
 FORM_FIELDS = {  # name: (cast, scale applied to the form value)
@@ -88,6 +90,8 @@ def params_from_form(form) -> dict:
             p[name] = [v for v in vals if v in crypto.TRIGGER_LABELS]
     if form.get("side") == "short":
         p["side"] = "short"
+    if "sl" in p:
+        p["sl"] = min(p["sl"], MAX_SL)   # a wider stop would be beaten by liquidation at our leverage
     return p
 
 
@@ -262,6 +266,7 @@ def summarize(trades: list[dict], stake: float = STAKE) -> dict:
         "avg_loss": sum(losses) / len(losses) if losses else None,
         "profit_factor": sum(wins) / -sum(losses) if losses and sum(losses) < 0 else None,
         "pnl": equity, "max_dd": dd, "curve": curve,
+        "worst": min(nets) if nets else None,
         "open_pnl": sum(stake * t["net"] for t in open_ if t["net"] is not None),
         "tp_hits": sum(t["reason"] == "take-profit" for t in closed),
         "sl_hits": sum(t["reason"] == "stop-loss" for t in closed),

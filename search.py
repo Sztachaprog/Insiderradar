@@ -24,7 +24,7 @@ import strategy
 
 SIDES = ("long", "short")
 TPS = (0.05, 0.08, 0.10, 0.15, 0.20)
-SLS = (0.03, 0.05, 0.07, 0.10)
+SLS = (0.03, 0.05, 0.07, 0.10, 0.15, 0.20)   # up to strategy.MAX_SL: wider loses to liquidation at 3x
 HOLDS = (4, 12, 24, 48)
 EXITS = list(itertools.product(SIDES, TPS, SLS, HOLDS))
 
@@ -43,6 +43,9 @@ TOP = 25              # rules kept in the results (best per entry filter, ranked
 AUTO_MAX = 6          # passing rules tracked live at most at once ("Auto: ..." strategies)
 AUTO_PER_RUN = 2      # new ones per search, so similar rules from one lucky stretch don't fill every slot
 AUTO_PREFIX = "Auto: "
+# Small caps can gap straight through a stop. A rule whose worst trade would wipe out most of the margin
+# at our leverage (-25% at 3x = -75% of margin, close to liquidation) never passes, however good on average.
+SAFE_WORST = -0.75 / strategy.LEVERAGE
 
 
 def filter_params() -> list[dict]:
@@ -111,14 +114,17 @@ class Path:
         return (-move if side == "short" else move) - fee
 
 
-def _stats(nets: list[float]) -> dict:
+def _stats(nets: list[float], sl: float) -> dict:
+    """lcb: average minus one standard error (penalises small / noisy samples).
+    per_risk: lcb in units of the stop (R), so a wide stop must earn proportionally more."""
     n = len(nets)
     if not n:
-        return {"n": 0, "avg": None, "win_rate": None, "lcb": None}
+        return {"n": 0, "avg": None, "win_rate": None, "lcb": None, "per_risk": None, "worst": None}
     avg = sum(nets) / n
     sd = (sum((x - avg) ** 2 for x in nets) / (n - 1)) ** 0.5 if n > 1 else 0.0
-    return {"n": n, "avg": avg, "win_rate": sum(x > 0 for x in nets) / n,
-            "lcb": avg - sd / n ** 0.5}       # average minus one standard error: penalises small/noisy samples
+    lcb = avg - sd / n ** 0.5
+    return {"n": n, "avg": avg, "win_rate": sum(x > 0 for x in nets) / n, "lcb": lcb,
+            "per_risk": lcb / sl, "worst": min(nets)}
 
 
 def run(rows: list[dict], paths: dict[int, list], now, fee: float = strategy.FEE) -> dict:
@@ -142,19 +148,21 @@ def run(rows: list[dict], paths: dict[int, list], now, fee: float = strategy.FEE
         seen.add(key)
         best = None
         for k, (side, tp, sl, h) in enumerate(EXITS):
-            s_tr = _stats([table[i][k] for i in tr if table[i][k] is not None])
+            s_tr = _stats([table[i][k] for i in tr if table[i][k] is not None], EXITS[k][2])
             if s_tr["n"] < MIN_TRAIN:
                 continue
-            if best is None or s_tr["lcb"] > best[0]["lcb"]:
+            if best is None or s_tr["per_risk"] > best[0]["per_risk"]:
                 best = (s_tr, k)
         if best:
             s_tr, k = best
             side, tp, sl, h = EXITS[k]
-            s_te = _stats([table[i][k] for i in te if table[i][k] is not None])
+            s_te = _stats([table[i][k] for i in te if table[i][k] is not None], sl)
             params = {**fp, "tp": tp, "sl": sl, "hold_h": h, **({"side": "short"} if side == "short" else {})}
-            best_per_filter.append({"params": params, "train": s_tr, "test": s_te,
-                                    "passed": bool(s_tr["avg"] > 0 and s_te["n"] >= MIN_TEST and s_te["avg"] > 0)})
-    best_per_filter.sort(key=lambda r: -r["train"]["lcb"])
+            safe = s_tr["worst"] > SAFE_WORST and (not s_te["n"] or s_te["worst"] > SAFE_WORST)
+            best_per_filter.append({"params": params, "train": s_tr, "test": s_te, "safe": safe,
+                                    "passed": bool(s_tr["avg"] > 0 and s_te["n"] >= MIN_TEST and s_te["avg"] > 0
+                                                   and safe)})
+    best_per_filter.sort(key=lambda r: -r["train"]["per_risk"])
     return {"ran_at": crypto.iso(now), "signals": len(done), "train": len(train_ids), "test": len(test_ids),
             "split_at": cut, "tried": len(filter_params()) * len(EXITS), "rules": best_per_filter[:TOP],
             "train_positive": sum(r["train"]["avg"] > 0 for r in best_per_filter),

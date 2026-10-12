@@ -822,6 +822,7 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         tabs, active = strategy_tabs("strategies")
         return render_template("crypto_strategies.html", catalog=catalog, selected=selected, tabs=tabs, active=active,
                                candidates=candidates, fee=fee, stake=stake, small_sample=SMALL_SAMPLE,
+                               leverage=strategy.LEVERAGE,
                                form=strategy.form_values(selected["params"]),
                                trigger_labels=crypto.TRIGGER_LABELS, sides=strategy.SIDES,
                                **common(page="strategies"))
@@ -891,9 +892,12 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         for r in (result or {}).get("rules", []):
             r["rules"] = strategy.describe(r["params"])
             r["tracked"] = tracked.get(strategy.version(r["params"]))
+            for part in (r["train"], r["test"]):
+                part.setdefault("worst", None)          # results saved before the worst trade was recorded
         tabs, active = strategy_tabs("search")
         return render_template("strategy_search.html", result=result, tabs=tabs, active=active,
                                min_train=search.MIN_TRAIN, min_test=search.MIN_TEST, auto_max=search.AUTO_MAX,
+                               leverage=strategy.LEVERAGE, max_sl=strategy.MAX_SL, safe_worst=search.SAFE_WORST,
                                **common(page="strategies"))
 
     @app.get("/krypto/pozycja/<key>/<int:event_id>")

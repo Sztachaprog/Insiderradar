@@ -86,3 +86,17 @@ def test_auto_names_are_short_and_readable():
     p = {"triggers": ["move1h"], "side": "short", "min_mcap": 30e6, "max_mcap": 300e6, "min_score": 50}
     assert search.auto_name(p) == "Auto: short, Ruch 1h, 30–300 mln $"
     assert search.auto_name({}) == "Auto: long, każdy ruch"
+
+
+def test_rule_whose_stop_gets_gapped_through_never_passes():
+    rows, paths = [], {}
+    for i in range(120):                      # +12% bounces, except one that gaps down 40% through any stop
+        at = T0 + timedelta(hours=6 * i)
+        r = row(i, at, triggers=("dump24",), ch24=-0.3)
+        b0 = crypto.iso(at + timedelta(minutes=30))
+        paths[i] = [(b0, 0.6, 0.6, 0.6, 0.6)] if i == 100 else [(b0, 1.0, 1.12, 0.99, 1.11)]
+        paths[i] += [(crypto.iso(at + timedelta(hours=h)), 1.0, 1.0, 1.0, 1.0) for h in range(1, 61)]
+        rows.append(r)
+    res = search.run(rows, paths, T0 + timedelta(days=60))
+    assert res["rules"] and not any(r["passed"] for r in res["rules"])
+    assert all(not r["safe"] for r in res["rules"] if r["test"]["n"])
