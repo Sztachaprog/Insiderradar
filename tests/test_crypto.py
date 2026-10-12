@@ -137,6 +137,15 @@ def test_scanner_records_event_once_and_snapshots(tmp_path):
     assert ("coin", "moon") in g.calls and g.calls.count(("coin", "moon")) == 1
 
 
+def test_history_gap_is_fetched_once_across_runs(tmp_path):
+    store = crypto.CryptoStore(tmp_path / "c.db")
+    g = FakeGecko()
+    crypto.CryptoScanner(store, lambda: g).run_once(now=T0)
+    crypto.CryptoScanner(store, lambda: g).run_once(now=T0 + timedelta(hours=3))   # 3 h hole -> one history call
+    crypto.CryptoScanner(store, lambda: g).run_once(now=T0 + timedelta(hours=5))   # new CI process, same hole
+    assert g.calls.count(("chart", "moon")) == 1
+
+
 def test_scanner_reports_errors(tmp_path):
     def boom():
         raise RuntimeError("429")

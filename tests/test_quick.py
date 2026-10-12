@@ -70,3 +70,24 @@ def test_schedule_runs_tasks_only_when_due(tmp_path):
 
 def test_binance_map_keeps_only_price_matching_tickers(scanner):
     assert scanner.store.binance_map() == {"MOONUSDT": "MOON"}
+
+
+def test_coingecko_interval_follows_the_monthly_budget(tmp_path):
+    sched = ci.Schedule(tmp_path / "s.db")
+    start = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    assert sched.coingecko_every(start) == pytest.approx(48)          # 9000 credits / ~10 per scan over 30 days
+    for i in range(10):                                               # scans cost 30 calls each: too many
+        sched.coingecko_used(30, start + timedelta(hours=i))
+    every = sched.coingecko_every(start + timedelta(hours=10))
+    assert 120 < every <= ci.CG_MAX_EVERY_MIN                         # 8700 left / 30 = 290 scans for ~29.6 days
+    for i in range(100):                                              # cheap scans: 3 calls each
+        sched.coingecko_used(3, start + timedelta(hours=10, minutes=i))
+    assert sched.coingecko_every(start + timedelta(hours=12)) == ci.CG_MIN_EVERY_MIN
+
+
+def test_coingecko_budget_seeds_a_month_started_midway(tmp_path):
+    sched = ci.Schedule(tmp_path / "s.db")
+    mid = datetime(2026, 10, 16, 12, tzinfo=timezone.utc)             # half of October assumed spent
+    sched.coingecko_used(6, mid)
+    used, scans, seeded = sched._usage(mid)
+    assert seeded == 4500 and used == 4506 and scans == 1

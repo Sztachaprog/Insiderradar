@@ -85,6 +85,7 @@ class CoinGeckoClient:
             self.session.headers["x-cg-demo-api-key"] = api_key
         self.delay = 2.2 if api_key else 6.5  # public API allows only a few calls per minute
         self._last = 0.0
+        self.calls = 0  # every request counts against the monthly credit limit, retries too
 
     def _get(self, path: str, **params):
         for attempt in range(2):
@@ -92,6 +93,7 @@ class CoinGeckoClient:
             if wait > 0:
                 time.sleep(wait)
             resp = self.session.get(CG_URL + path, params=params, timeout=30)
+            self.calls += 1
             self._last = time.monotonic()
             if resp.status_code == 429 and attempt == 0:
                 time.sleep(65)
@@ -265,6 +267,16 @@ class CryptoStore:
     def save_binance_map(self, pairs: dict[str, str]) -> None:
         with self._conn() as c:
             c.execute("INSERT OR REPLACE INTO crypto_meta VALUES ('binance_map', ?)", (json.dumps(pairs),))
+
+    def history_fetched(self) -> dict[str, str]:
+        """Coin -> when its CoinGecko history was last fetched (kept between CI runs, so gaps cost one call)."""
+        with self._conn() as c:
+            row = c.execute("SELECT value FROM crypto_meta WHERE key = 'history_fetched'").fetchone()
+        return json.loads(row[0]) if row else {}
+
+    def save_history_fetched(self, fetched: dict[str, str]) -> None:
+        with self._conn() as c:
+            c.execute("INSERT OR REPLACE INTO crypto_meta VALUES ('history_fetched', ?)", (json.dumps(fetched),))
 
     def binance_map(self) -> dict[str, str]:
         """Binance pair -> universe ticker, verified during the last full scan."""
@@ -545,7 +557,7 @@ class CryptoScanner:
         self.last_run: str | None = None
         self.last_new = 0
         self.last_error: str | None = None
-        self.backfilled: dict[str, datetime] = {}  # coin -> last history fetch, so gaps cost one call
+        self.last_calls = 0  # CoinGecko requests made by the last full scan
 
     def run_once(self, now: datetime | None = None, mode: str = "full") -> None:
         """mode='full': CoinGecko ranking (~hourly). mode='quick': Binance ticker (every few minutes)."""
@@ -556,7 +568,11 @@ class CryptoScanner:
             if mode == "quick":
                 self._run_quick(now or utcnow())
             else:
-                self._run(self.client_factory(), now or utcnow())
+                client = self.client_factory()
+                try:
+                    self._run(client, now or utcnow())
+                finally:
+                    self.last_calls = getattr(client, "calls", 0)
             self.last_error = None
         except Exception as exc:
             self.last_error = safety.safe_error(exc)
@@ -613,20 +629,23 @@ class CryptoScanner:
         # Fill gaps (app was off) from CoinGecko hourly history, so horizons and
         # strategy simulations see a continuous path for the first week after detection.
         prices = self.store.prices()
+        fetched = {k: v for k, v in self.store.history_fetched().items() if v >= iso(now - timedelta(days=1))}
+        def stale(cid):
+            return fetched.get(cid, "") < iso(now - timedelta(hours=6))
         gaps = []
         for e in events:
             if e["coin_id"] not in tracked:
                 continue
             end = min(now, parse_iso(e["detected_at"]) + timedelta(hours=HORIZONS[-1][0]))
-            stale = self.backfilled.get(e["coin_id"], now - timedelta(days=1)) < now - timedelta(hours=6)
-            if stale and max_gap(prices.get(e["coin_id"], []), e["detected_at"], end) > timedelta(minutes=90):
+            if stale(e["coin_id"]) and max_gap(prices.get(e["coin_id"], []), e["detected_at"], end) > timedelta(minutes=90):
                 gaps.append(e["coin_id"])
-        for cid in list(dict.fromkeys(gaps))[:GAPS_PER_RUN] + ([BENCHMARK] if gaps else []):
-            self.backfilled[cid] = now
+        for cid in list(dict.fromkeys(gaps))[:GAPS_PER_RUN] + ([BENCHMARK] if gaps and stale(BENCHMARK) else []):
+            fetched[cid] = iso(now)
             try:
                 self.store.save_prices(cid, client.chart(cid, days=TRACK_DAYS))
             except Exception:
                 pass
+        self.store.save_history_fetched(fetched)
 
     def _news(self, events: list[dict], now: datetime) -> None:
         """Headlines for fresh moves ("why is it moving?"); refreshed every few hours while the move is recent."""

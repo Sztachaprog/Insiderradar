@@ -36,10 +36,16 @@ import xtb
 
 SITE = Path("site")
 EXPORT_FLAG = Path("export_due")   # written by the scan step when the static site is due; the workflow checks it
+# CoinGecko Demo: 10,000 credits a month. The full scan runs as often as the rest of the month's budget
+# allows (never more often than CG_MIN_EVERY_MIN); the margin covers local runs and retries.
+CG_MONTHLY_BUDGET = int(os.environ.get("CG_MONTHLY_BUDGET", "9000"))
+CG_MIN_EVERY_MIN = int(os.environ.get("CG_MIN_EVERY_MIN", "30"))
+CG_MAX_EVERY_MIN = 180
+CG_CALLS_PER_SCAN_GUESS = 10
 # How often each task runs (minutes). The workflow is triggered every ~5 min; each task remembers its
 # last run in the database, so irregular or extra triggers never make anything run too often.
 EVERY = {
-    "coingecko_full": int(os.environ.get("EVERY_COINGECKO_MIN", "55")),   # ranking, DEX-only coins, project info
+    "coingecko_full": CG_MIN_EVERY_MIN,   # ranking, DEX-only coins, project info: Schedule.coingecko_every
     "stocks": int(os.environ.get("EVERY_STOCKS_MIN", "14")),              # SEC filings arrive with a delay anyway
     "whales": int(os.environ.get("EVERY_WHALES_MIN", "55")),
     "export": int(os.environ.get("EVERY_EXPORT_MIN", "9")),
@@ -57,6 +63,10 @@ def timed(name: str, fn) -> None:
     log(f"{name}: {time.monotonic() - t0:.0f} s")
 
 
+def _next_month(start: datetime) -> datetime:
+    return (start + timedelta(days=32)).replace(day=1)
+
+
 class Schedule:
     """Last run of each task, stored in the database (survives between workflow runs)."""
 
@@ -65,11 +75,44 @@ class Schedule:
         with sqlite3.connect(self.path) as c:
             c.execute("CREATE TABLE IF NOT EXISTS ci_schedule (task TEXT PRIMARY KEY, last_run TEXT NOT NULL)")
 
+            c.execute("""CREATE TABLE IF NOT EXISTS ci_cg_usage (
+                month TEXT PRIMARY KEY, calls INTEGER NOT NULL, scans INTEGER NOT NULL, seeded INTEGER NOT NULL)""")
+
     def due(self, task: str, now: datetime | None = None) -> bool:
         now = now or crypto.utcnow()
         with sqlite3.connect(self.path) as c:
             row = c.execute("SELECT last_run FROM ci_schedule WHERE task = ?", (task,)).fetchone()
-        return not row or crypto.parse_iso(row[0]) <= now - timedelta(minutes=EVERY[task]) + timedelta(seconds=30)
+        every = self.coingecko_every(now) if task == "coingecko_full" else EVERY[task]
+        return not row or crypto.parse_iso(row[0]) <= now - timedelta(minutes=every) + timedelta(seconds=30)
+
+    def _usage(self, now: datetime) -> tuple[int, int, int]:
+        """(credits used this month, full scans counted, credits assumed before counting started)."""
+        with sqlite3.connect(self.path) as c:
+            row = c.execute("SELECT calls, scans, seeded FROM ci_cg_usage WHERE month = ?",
+                            (now.strftime("%Y-%m"),)).fetchone()
+        if row:
+            return row
+        # A month we started counting in the middle of: assume the budget was spent evenly so far.
+        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        seeded = round(CG_MONTHLY_BUDGET * (now - start) / (_next_month(start) - start))
+        return seeded if start != now else 0, 0, seeded
+
+    def coingecko_used(self, calls: int, now: datetime | None = None) -> None:
+        now = now or crypto.utcnow()
+        used, scans, seeded = self._usage(now)
+        with sqlite3.connect(self.path) as c:
+            c.execute("INSERT OR REPLACE INTO ci_cg_usage VALUES (?, ?, ?, ?)",
+                      (now.strftime("%Y-%m"), used + calls, scans + 1, seeded))
+
+    def coingecko_every(self, now: datetime | None = None) -> float:
+        """Minutes between full CoinGecko scans so the monthly budget lasts until the 1st."""
+        now = now or crypto.utcnow()
+        used, scans, seeded = self._usage(now)
+        per_scan = (used - seeded) / scans if scans >= 5 else CG_CALLS_PER_SCAN_GUESS
+        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        minutes_left = (_next_month(start) - now) / timedelta(minutes=1)
+        scans_left = max(CG_MONTHLY_BUDGET - used, 0) / max(per_scan, 1)
+        return min(max(minutes_left / max(scans_left, 1), CG_MIN_EVERY_MIN), CG_MAX_EVERY_MIN)
 
     def done(self, task: str, now: datetime | None = None) -> None:
         with sqlite3.connect(self.path) as c:
@@ -105,8 +148,12 @@ def scan(only: set[str], force_whales: bool, force_all: bool = False):
         timed("krypto (CoinGecko, pełny)" if full else "krypto (Binance, szybki)",
               lambda: cscanner.run_once(mode="full" if full else "quick"))
         log(f"  nowe ruchy: {cscanner.last_new}, błąd: {cscanner.last_error}")
-        if full and not cscanner.last_error:
-            schedule.done("coingecko_full")
+        if full:
+            schedule.coingecko_used(cscanner.last_calls)
+            log(f"  CoinGecko: {cscanner.last_calls} zapytań, następny pełny skan za "
+                f"{schedule.coingecko_every():.0f} min")
+        if full and (cscanner.last_calls or not cscanner.last_error):
+            schedule.done("coingecko_full")   # a failed scan that spent credits waits its turn too
         timed("świece i dziennik strategii", lambda: candles_and_journal(store, cstore, candle_status))
         timed("historia 2 mies. z Binance", lambda: run_backfill(history_status))
     # Whale holders change slowly and the scan is the heaviest; every ~30 min is plenty.
