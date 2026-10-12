@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Szukanie strategii · Strategie lev{% endblock %}
+{% block content %}
+  {% include "_tabs.html" %}
+  <p class="muted" style="margin:0 0 10px; max-width: 980px">Program sam sprawdza tysiące kombinacji reguł: typ ruchu, kapitalizację, zmianę 24h, ocenę, wolumen,
+    kierunek (long albo short), take-profit, stop-loss i czas trzymania. Wszystko liczy na tych samych świecach i z tymi samymi kosztami co tabela strategii.</p>
+  <p class="muted" style="margin:0 0 14px; max-width: 980px"><b>Jak odsiewa przypadek:</b> sygnały są podzielone w czasie. Reguły są wybierane tylko na <b>starszych 60%</b> („wybór”),
+    a potem sprawdzane na <b>nowszych 40%</b> („sprawdzian”), których przy wyborze nie widziały. Reguła <b>przechodzi</b>, gdy zarabia w obu częściach,
+    a w sprawdzianie ma co najmniej {{ min_test }} transakcji. Najlepsze, które przeszły, trafiają do śledzenia na żywo jako strategie „Auto” (najwyżej {{ auto_max }} naraz).
+    Dopiero wynik na żywo, liczony od dnia dodania, jest ostatecznym testem.</p>
+
+{% if not result %}
+  <section class="card section"><p class="muted">Szukanie jeszcze się nie odbyło. Uruchamia się co kilka godzin przy skanie krypto.</p></section>
+{% else %}
+  <div class="kpis" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px">
+    <div class="card" style="padding:14px"><small class="muted">sprawdzonych kombinacji</small><div class="mono" style="font-size:22px; font-weight:700">{{ "{:,}".format(result.tried).replace(",", " ") }}</div></div>
+    <div class="card" style="padding:14px"><small class="muted">sygnałów ze świecami</small><div class="mono" style="font-size:22px; font-weight:700">{{ result.signals }}</div>
+      <span class="sub">wybór {{ result.train }} · sprawdzian {{ result.test }} (od {{ result.split_at|local("%d.%m") }})</span></div>
+    <div class="card" style="padding:14px"><small class="muted">zarabiało przy wyborze</small><div class="mono" style="font-size:22px; font-weight:700">{{ result.train_positive }}</div>
+      <span class="sub">różnych zestawów filtrów</span></div>
+    <div class="card" style="padding:14px"><small class="muted">przeszło sprawdzian</small><div class="mono" style="font-size:22px; font-weight:700">{{ result.passed }}</div>
+      <span class="sub">reszta działała tylko przypadkiem</span></div>
+  </div>
+
+  <section class="card table-wrap">
+    <table>
+      <thead><tr><th>Reguły</th><th class="num">Wybór (starsze)</th><th class="num">Sprawdzian (nowsze)</th><th>Wynik</th></tr></thead>
+      <tbody>
+      {% for r in result.rules %}{% set tr, te = r.train, r.test %}
+        <tr>
+          <td style="white-space:normal; min-width:280px"><div class="rules" style="display:flex; flex-wrap:wrap; gap:4px">{% for rule in r.rules %}<span class="chip">{{ rule }}</span>{% endfor %}</div></td>
+          <td class="num"><b class="{{ 'up' if tr.avg >= 0 else 'down' }}">{{ tr.avg|pct }}</b>
+            <span class="sub">{{ tr.n }} transakcji · trafność {{ tr.win_rate|pct(false) }}</span></td>
+          <td class="num">{% if te.n %}<b class="{{ 'up' if te.avg >= 0 else 'down' }}">{{ te.avg|pct }}</b>
+            <span class="sub">{{ te.n }} transakcji · trafność {{ te.win_rate|pct(false) }}</span>{% else %}—{% endif %}</td>
+          <td>{% if r.tracked %}<a class="chip pill-ok" href="{{ url_for('crypto_strategies', s=r.tracked) }}" style="background:var(--blue-soft); color:var(--blue)">śledzona na żywo ›</a>
+              {% elif r.passed %}<span class="chip up">przeszła</span>
+              {% else %}<span class="muted" style="font-size:12.5px">nie przeszła</span>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  <p class="muted" style="font-size:12.5px; margin-top:10px">Ostatnie szukanie: {{ result.ran_at|local("%d.%m %H:%M") }}. Lista pokazuje {{ result.rules|length }} najlepszych zestawów filtrów według wyniku przy wyborze,
+    każdy z najlepszymi dla niego TP, SL i czasem trzymania. Reguła musi mieć co najmniej {{ min_train }} transakcji przy wyborze.</p>
+{% endif %}
+{% endblock %}

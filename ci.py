@@ -31,6 +31,7 @@ import news
 import notify
 import strategy
 import safety
+import search
 import whales
 import xtb
 
@@ -49,6 +50,7 @@ EVERY = {
     "stocks": int(os.environ.get("EVERY_STOCKS_MIN", "14")),              # SEC filings arrive with a delay anyway
     "whales": int(os.environ.get("EVERY_WHALES_MIN", "55")),
     "export": int(os.environ.get("EVERY_EXPORT_MIN", "9")),
+    "search": int(os.environ.get("EVERY_SEARCH_MIN", "355")),    # strategy search: new signals arrive slowly
 }
 STATUS = Path(os.environ.get("SCAN_STATUS", "scan_status.json"))  # scanner status, shown by the export step
 WHALES_STATUS = Path("whales_status.json")   # written by the whales workflow (SCAN_STATUS=whales_status.json)
@@ -157,6 +159,9 @@ def scan(only: set[str], force_whales: bool, force_all: bool = False):
             schedule.done("coingecko_full")   # a failed scan that spent credits waits its turn too
         timed("świece i dziennik strategii", lambda: candles_and_journal(store, cstore, candle_status))
         timed("historia 2 mies. z Binance", lambda: run_backfill(history_status))
+        if due["search"]:
+            timed("szukanie strategii", lambda: run_search(cstore))
+            schedule.done("search")
     # Whale holders change slowly and the scan is the heaviest; every ~30 min is plenty.
     if "whales" in only and (force_whales or due["whales"]):
         timed("wieloryby", wscanner.run_once)
@@ -226,7 +231,7 @@ def export(parts, base_path: str) -> int:
         base_url = "http://localhost" + base_path.rstrip("/")
 
         pages = ["/", "/wyniki", "/krypto", "/krypto/wyniki", "/krypto/strategie", "/wieloryby",
-                 "/krypto/strategie/otwarte", "/krypto/strategie/historia", "/krypto/otwarte", "/wieloryby/otwarte"]
+                 "/krypto/strategie/otwarte", "/krypto/strategie/historia", "/krypto/strategie/szukanie", "/krypto/otwarte", "/wieloryby/otwarte"]
         for code in "PS":
             rows, _ = webapp.build_rows(store.all(), {"code": code, "min": "0", "all_owners": "1", "plan": "1"},
                                         {"tracked": store.tracked(), "prices": store.prices(),
@@ -314,6 +319,23 @@ def candles_and_journal(store, cstore, status: Status, now=None) -> None:
     written = sum(journal.record(key, params, strategy.backtest(recent, cdata["prices"], params, now, paths=paths)["trades"],
                                  is_final) for key, params in catalog)
     log(f"  dziennik strategii: zapisano/zaktualizowano {written} transakcji")
+
+
+def run_search(cstore) -> None:
+    """Try rule combinations on every signal with candles; rules that also hold on newer signals
+    are saved as "Auto: ..." strategies, so the scans track them live from now on."""
+    try:
+        cdata = {"events": cstore.events(), "prices": {}, "coins": cstore.coins(), "weights": cstore.weights(),
+                 "xtb_crypto": set(), "news": {}}
+        rows, _ = webapp.build_crypto_rows(cdata, {"history": "1"})
+        paths = candles.CandleStore(webapp.DB_PATH).paths([r["id"] for r in rows])
+        result = search.run(rows, paths, crypto.utcnow())
+        search.SearchStore(webapp.DB_PATH).save(result)
+        added = search.track_passing(result, cstore)
+        log(f"  strategie: {result['tried']} kombinacji na {result['signals']} sygnałach, "
+            f"przeszło test {result['passed']} z {result['train_positive']}, nowe śledzone: {added or 'brak'}")
+    except Exception as exc:  # never break the scan
+        log(f"  szukanie strategii: błąd {safety.safe_error(exc)}")
 
 
 def run_backfill(status: Status) -> None:

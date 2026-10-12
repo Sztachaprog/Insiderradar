@@ -32,6 +32,7 @@ import history
 import market
 import signals
 import safety
+import search
 import news
 import notify
 import strategy
@@ -733,8 +734,10 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
                 loaded["p"] = kstore.paths()
             return loaded["p"]
         catalog = [{"key": k, "name": n, "desc": d, "params": p, "saved": False} for k, n, d, p in strategy.PRESETS]
-        catalog += [{"key": f"c{s['id']}", "id": s["id"], "name": s["name"], "desc": "Twoja strategia",
-                     "params": s["params"], "saved": True} for s in cstore.strategies()]
+        catalog += [{"key": f"c{s['id']}", "id": s["id"], "name": s["name"],
+                     "desc": "Znaleziona przez szukanie strategii." if s["name"].startswith(search.AUTO_PREFIX)
+                     else "Twoja strategia", "params": s["params"], "saved": True, "created_at": s["created_at"]}
+                    for s in cstore.strategies()]
         if custom is not None:
             catalog.append({"key": "custom", "name": "Nowa (niezapisana)", "desc": "Podgląd z edytora",
                             "params": custom, "saved": False})
@@ -747,9 +750,13 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
             else:
                 s["result"] = strategy.backtest(rows, prices, s["params"], now, fee, stake, paths())
             # Live trades are the real test; the 2-month Binance replay is shown separately for context.
-            trades = s["result"]["trades"]
-            s["live"] = strategy.summarize([t for t in trades if t["row"].get("origin", "live") != "backfill"], stake)
-            s["hist"] = strategy.summarize([t for t in trades if t["row"].get("origin") == "backfill"], stake)
+            # A saved strategy is live only from its creation: earlier signals were known when it was made.
+            since = s.get("created_at", "")
+            live = [t for t in s["result"]["trades"]
+                    if t["row"].get("origin", "live") != "backfill" and t["entry_at"] >= since]
+            ids = {id(t) for t in live}
+            s["live"] = strategy.summarize(live, stake)
+            s["hist"] = strategy.summarize([t for t in s["result"]["trades"] if id(t) not in ids], stake)
             s["rules"] = strategy.describe(s["params"])
             s["full"] = {**strategy.DEFAULTS, **s["params"]}
         return catalog
@@ -850,7 +857,8 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
     def strategy_tabs(active):
         return [("strategies", "Strategie", url_for("crypto_strategies")),
                 ("open", "Otwarte pozycje", url_for("strategy_open")),
-                ("history", "Historia transakcji", url_for("strategy_history"))], active
+                ("history", "Historia transakcji", url_for("strategy_history")),
+                ("search", "Szukanie strategii", url_for("strategy_search"))], active
 
     @app.get("/krypto/strategie/otwarte")
     def strategy_open():
@@ -875,6 +883,18 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         tabs, active = strategy_tabs("history")
         return render_template("positions.html", mode="history", positions=closed, strategy_names=names, tabs=tabs,
                                active=active, heading="Historia transakcji", **common(page="strategies"))
+
+    @app.get("/krypto/strategie/szukanie")
+    def strategy_search():
+        result = search.SearchStore(store.path).latest()
+        tracked = {strategy.version(s["params"]): f"c{s['id']}" for s in cstore.strategies()}
+        for r in (result or {}).get("rules", []):
+            r["rules"] = strategy.describe(r["params"])
+            r["tracked"] = tracked.get(strategy.version(r["params"]))
+        tabs, active = strategy_tabs("search")
+        return render_template("strategy_search.html", result=result, tabs=tabs, active=active,
+                               min_train=search.MIN_TRAIN, min_test=search.MIN_TEST, auto_max=search.AUTO_MAX,
+                               **common(page="strategies"))
 
     @app.get("/krypto/pozycja/<key>/<int:event_id>")
     def position(key, event_id):
