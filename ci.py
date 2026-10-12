@@ -15,6 +15,7 @@ import functools
 import json
 import os
 import shutil
+import sqlite3
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -34,8 +35,16 @@ import whales
 import xtb
 
 SITE = Path("site")
+EXPORT_FLAG = Path("export_due")   # written by the scan step when the static site is due; the workflow checks it
+# How often each task runs (minutes). The workflow is triggered every ~5 min; each task remembers its
+# last run in the database, so irregular or extra triggers never make anything run too often.
+EVERY = {
+    "coingecko_full": int(os.environ.get("EVERY_COINGECKO_MIN", "55")),   # ranking, DEX-only coins, project info
+    "stocks": int(os.environ.get("EVERY_STOCKS_MIN", "14")),              # SEC filings arrive with a delay anyway
+    "whales": int(os.environ.get("EVERY_WHALES_MIN", "55")),
+    "export": int(os.environ.get("EVERY_EXPORT_MIN", "9")),
+}
 STATUS = Path("scan_status.json")  # scanner status from the scan step, shown by the export step
-WHALES_EVERY_MIN = int(os.environ.get("WHALES_EVERY_MIN", "30"))
 
 
 def log(msg: str) -> None:
@@ -48,7 +57,26 @@ def timed(name: str, fn) -> None:
     log(f"{name}: {time.monotonic() - t0:.0f} s")
 
 
-def scan(only: set[str], force_whales: bool):
+class Schedule:
+    """Last run of each task, stored in the database (survives between workflow runs)."""
+
+    def __init__(self, path):
+        self.path = str(path)
+        with sqlite3.connect(self.path) as c:
+            c.execute("CREATE TABLE IF NOT EXISTS ci_schedule (task TEXT PRIMARY KEY, last_run TEXT NOT NULL)")
+
+    def due(self, task: str, now: datetime | None = None) -> bool:
+        now = now or crypto.utcnow()
+        with sqlite3.connect(self.path) as c:
+            row = c.execute("SELECT last_run FROM ci_schedule WHERE task = ?", (task,)).fetchone()
+        return not row or crypto.parse_iso(row[0]) <= now - timedelta(minutes=EVERY[task]) + timedelta(seconds=30)
+
+    def done(self, task: str, now: datetime | None = None) -> None:
+        with sqlite3.connect(self.path) as c:
+            c.execute("INSERT OR REPLACE INTO ci_schedule VALUES (?, ?)", (task, crypto.iso(now or crypto.utcnow())))
+
+
+def scan(only: set[str], force_whales: bool, force_all: bool = False):
     store = webapp.Store(webapp.DB_PATH)
     cstore = crypto.CryptoStore(webapp.DB_PATH)
     wstore = whales.WhaleStore(webapp.DB_PATH)
@@ -59,22 +87,37 @@ def scan(only: set[str], force_whales: bool):
     cscanner = crypto.CryptoScanner(cstore, crypto.CoinGeckoClient, news_factory=news.NewsClient)
     wscanner = whales.WhaleScanner(wstore, whales.client_for)
 
-    if "stocks" in only:
+    schedule = Schedule(webapp.DB_PATH)
+    due = {t: force_all or schedule.due(t) for t in EVERY}
+    if "stocks" in only and due["stocks"]:
         if ua:
             timed("insiderzy + ceny", scanner.run_once)
             log(f"  nowe zgłoszenia: {scanner.last_new}, błąd: {scanner.last_error}, ceny: {tracker.last_error}")
+            schedule.done("stocks")
         else:
             log("insiderzy: pominięte, brak sekretu SEC_USER_AGENT")
+    elif "stocks" in only:
+        log("insiderzy: jeszcze nie pora")
     candle_status, history_status = Status(), Status()
     if "crypto" in only:
-        timed("krypto", cscanner.run_once)
+        # Full CoinGecko scan about hourly (it also refreshes the ticker->coin map); Binance in between.
+        full = due["coingecko_full"] or not cstore.universe()
+        timed("krypto (CoinGecko, pełny)" if full else "krypto (Binance, szybki)",
+              lambda: cscanner.run_once(mode="full" if full else "quick"))
         log(f"  nowe ruchy: {cscanner.last_new}, błąd: {cscanner.last_error}")
+        if full and not cscanner.last_error:
+            schedule.done("coingecko_full")
         timed("świece i dziennik strategii", lambda: candles_and_journal(store, cstore, candle_status))
         timed("historia 2 mies. z Binance", lambda: run_backfill(history_status))
     # Whale holders change slowly and the scan is the heaviest; every ~30 min is plenty.
-    if "whales" in only and (force_whales or datetime.now(timezone.utc).minute % WHALES_EVERY_MIN < 10):
+    if "whales" in only and (force_whales or due["whales"]):
         timed("wieloryby", wscanner.run_once)
         log(f"  nowe portfele: {wscanner.last_new}, błąd: {wscanner.last_error}")
+        schedule.done("whales")
+
+    if only and due["export"]:   # the export step of the workflow only runs when this flag exists
+        EXPORT_FLAG.write_text(crypto.iso(crypto.utcnow()))
+        schedule.done("export")
 
     objs = {"stocks": scanner, "tracker": tracker, "crypto": cscanner, "whales": wscanner, "candles": candle_status,
             "history": history_status}
@@ -303,10 +346,11 @@ def main(argv=None) -> int:
     p.add_argument("--no-scan", action="store_true")
     p.add_argument("--no-export", action="store_true")
     p.add_argument("--whales", action="store_true", help="scan whales regardless of the clock")
+    p.add_argument("--all", action="store_true", help="run every task now, ignoring the schedule")
     p.add_argument("--base", default=os.environ.get("PAGES_BASE")
                    or "/" + os.environ.get("GITHUB_REPOSITORY", "/").split("/")[-1])
     args = p.parse_args(argv)
-    parts = scan(set() if args.no_scan else set(args.only.split(",")), args.whales)
+    parts = scan(set() if args.no_scan else set(args.only.split(",")), args.whales, args.all)
     if not args.no_scan:
         send_alerts(parts)
     if args.no_export:

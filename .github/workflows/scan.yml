@@ -1,11 +1,11 @@
 name: Skan danych
 
-# Every ~10 min: one scan cycle (insiders, crypto, whales every ~30 min), the database
-# is kept on the `data` branch (one force-pushed commit, so history does not grow),
-# and a read-only snapshot of the app is published to GitHub Pages.
-# The every-10-minutes trigger comes from an external cron (cron-job.org) calling the
-# workflow_dispatch API - GitHub's own schedule is best-effort and often skipped.
-# The schedule below is only an hourly safety net.
+# Triggered every ~5 min by an external cron (cron-job.org -> workflow_dispatch API);
+# GitHub's own schedule is best-effort and often skipped, so it is only an hourly safety net.
+# Every run: crypto via Binance (+ candles, strategy journal, Telegram alerts). Slower tasks run
+# when due (ci.py remembers their last run in the database): CoinGecko ranking ~hourly,
+# insiders ~15 min, whales ~hourly, static site ~10 min.
+# The database lives xz-compressed on the `data` branch (one force-pushed commit).
 on:
   schedule:
     - cron: "47 * * * *"
@@ -13,6 +13,10 @@ on:
     inputs:
       whales:
         description: "Skanuj też wieloryby niezależnie od godziny"
+        type: boolean
+        default: false
+      all:
+        description: "Uruchom wszystkie zadania teraz (bez czekania na ich porę)"
         type: boolean
         default: false
 
@@ -43,7 +47,8 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       # Smaller per-run budgets: runs are frequent, so coverage builds up over the day.
       HISTORY_PER_RUN: "2"
-      CRYPTO_DETAILS_PER_RUN: "5"
+      CRYPTO_DETAILS_PER_RUN: "3"     # CoinGecko's free plan: ~10k calls/month
+      GT_CALLS_PER_RUN: "5"           # GeckoTerminal calls per run (runs are every 5 min)
       WHALE_HOLDERS_PER_RUN: "10"
       WHALE_TRANSFERS_PER_RUN: "25"
     steps:
@@ -73,7 +78,7 @@ jobs:
           fi
 
       - name: Skan
-        run: python ci.py --no-export ${{ inputs.whales && '--whales' || '' }}
+        run: python ci.py --no-export ${{ inputs.whales && '--whales' || '' }} ${{ inputs.all && '--all' || '' }}
 
       - name: Zapisz bazę na gałęzi data
         if: success() || failure()
@@ -97,11 +102,15 @@ jobs:
           pwd
 
       - name: Eksport strony
+        id: export
+        if: hashFiles('export_due') != ''   # only when the site is due (~every 10 min)
         run: python ci.py --no-scan
 
       - uses: actions/upload-pages-artifact@v3
+        if: steps.export.outcome == 'success'
         with:
           path: site
 
       - id: deploy
+        if: steps.export.outcome == 'success'
         uses: actions/deploy-pages@v4

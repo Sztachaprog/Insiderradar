@@ -30,7 +30,14 @@ MIN_MCAP = float(os.environ.get("CRYPTO_MIN_MCAP", "3e6"))
 MAX_MCAP = float(os.environ.get("CRYPTO_MAX_MCAP", "1.5e9"))      # "smaller tokens"
 MIN_VOLUME = 200_000
 TRACK_DAYS = 30
-DETAILS_PER_RUN = int(os.environ.get("CRYPTO_DETAILS_PER_RUN", "8"))  # project info calls per scan
+DETAILS_PER_RUN = int(os.environ.get("CRYPTO_DETAILS_PER_RUN", "3"))  # project info calls per full scan
+GAPS_PER_RUN = 2              # CoinGecko history calls per full scan (candles cover most gaps now)
+# Quick mode (every few minutes): Binance's 24h ticker for every pair in one call, no key and no monthly cap.
+# The full CoinGecko scan (ranking, small DEX-only coins, trending, project info) runs about hourly and
+# keeps the "universe" that maps Binance tickers to CoinGecko coins.
+BINANCE_TICKER = "https://data-api.binance.vision/api/v3/ticker/24hr"
+MAP_PRICE_MATCH = 0.10        # Binance vs CoinGecko price at the same moment; otherwise the ticker is another coin
+BENCHMARK_PAIR = "BTCUSDT"
 NEWS_PER_RUN = int(os.environ.get("CRYPTO_NEWS_PER_RUN", "8"))        # Google News searches per scan
 NEWS_MAX_AGE_H = 6
 DEDUPE_HOURS = 72
@@ -147,6 +154,11 @@ class CryptoStore:
                 pass
             c.execute("""CREATE TABLE IF NOT EXISTS crypto_news (
                 coin_id TEXT PRIMARY KEY, items TEXT NOT NULL, fetched_at TEXT NOT NULL)""")
+            c.execute("""CREATE TABLE IF NOT EXISTS coin_universe (
+                symbol TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+            c.execute("""CREATE TABLE IF NOT EXISTS binance_ticks (
+                symbol TEXT NOT NULL, ts TEXT NOT NULL, price REAL NOT NULL, PRIMARY KEY (symbol, ts)) WITHOUT ROWID""")
+            c.execute("""CREATE TABLE IF NOT EXISTS crypto_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)""")
             c.execute("""CREATE TABLE IF NOT EXISTS crypto_strategies (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, params TEXT NOT NULL,
                 created_at TEXT NOT NULL)""")
@@ -227,6 +239,57 @@ class CryptoStore:
     def weights(self) -> dict:
         with self._conn() as c:
             return calibration.load_weights(c, "crypto")
+
+    # --- quick mode support ---
+    def save_universe(self, coins: list[dict], trending: set[str]) -> None:
+        """Ticker -> coin map from the last full CoinGecko scan (biggest market cap wins a shared ticker)."""
+        best: dict[str, dict] = {}
+        for c in coins:
+            sym = (c.get("symbol") or "").upper()
+            if sym and (sym not in best or (c.get("market_cap") or 0) > (best[sym].get("market_cap") or 0)):
+                best[sym] = c
+        keep = ("id", "symbol", "name", "image", "current_price", "market_cap", "market_cap_rank",
+                "fully_diluted_valuation", "total_volume", "ath_change_percentage",
+                "price_change_percentage_7d_in_currency", "circulating_supply", "total_supply", "max_supply", "ath")
+        now = iso(utcnow())
+        with self._conn() as c:
+            c.execute("DELETE FROM coin_universe")
+            c.executemany("INSERT INTO coin_universe VALUES (?, ?, ?)",
+                          [(sym, json.dumps({k: v.get(k) for k in keep}), now) for sym, v in best.items()])
+            c.execute("INSERT OR REPLACE INTO crypto_meta VALUES ('trending', ?)", (json.dumps(sorted(trending)),))
+
+    def universe(self) -> dict[str, dict]:
+        with self._conn() as c:
+            return {s: json.loads(d) for s, d in c.execute("SELECT symbol, data FROM coin_universe")}
+
+    def save_binance_map(self, pairs: dict[str, str]) -> None:
+        with self._conn() as c:
+            c.execute("INSERT OR REPLACE INTO crypto_meta VALUES ('binance_map', ?)", (json.dumps(pairs),))
+
+    def binance_map(self) -> dict[str, str]:
+        """Binance pair -> universe ticker, verified during the last full scan."""
+        with self._conn() as c:
+            row = c.execute("SELECT value FROM crypto_meta WHERE key = 'binance_map'").fetchone()
+        return json.loads(row[0]) if row else {}
+
+    def trending(self) -> set[str]:
+        with self._conn() as c:
+            row = c.execute("SELECT value FROM crypto_meta WHERE key = 'trending'").fetchone()
+        return set(json.loads(row[0])) if row else set()
+
+    def save_ticks(self, prices: dict[str, float], at: datetime, keep_hours: int = 3) -> None:
+        with self._conn() as c:
+            c.executemany("INSERT OR REPLACE INTO binance_ticks VALUES (?, ?, ?)",
+                          [(sym, iso(at), p) for sym, p in prices.items()])
+            c.execute("DELETE FROM binance_ticks WHERE ts < ?", (iso(at - timedelta(hours=keep_hours)),))
+
+    def ticks_around(self, at: datetime, tolerance_min: int = 20) -> dict[str, float]:
+        """Latest stored tick per ticker at or before `at` (and not older than tolerance)."""
+        with self._conn() as c:
+            rows = c.execute("""SELECT symbol, price FROM binance_ticks t WHERE ts = (
+                                  SELECT MAX(ts) FROM binance_ticks WHERE symbol = t.symbol AND ts <= ? AND ts >= ?)""",
+                             (iso(at), iso(at - timedelta(minutes=tolerance_min)))).fetchall()
+        return dict(rows)
 
     def set_weights(self, weights: dict | None) -> None:
         with self._conn() as c:
@@ -484,12 +547,16 @@ class CryptoScanner:
         self.last_error: str | None = None
         self.backfilled: dict[str, datetime] = {}  # coin -> last history fetch, so gaps cost one call
 
-    def run_once(self, now: datetime | None = None) -> None:
+    def run_once(self, now: datetime | None = None, mode: str = "full") -> None:
+        """mode='full': CoinGecko ranking (~hourly). mode='quick': Binance ticker (every few minutes)."""
         if not self.lock.acquire(blocking=False):
             return
         self.running = True
         try:
-            self._run(self.client_factory(), now or utcnow())
+            if mode == "quick":
+                self._run_quick(now or utcnow())
+            else:
+                self._run(self.client_factory(), now or utcnow())
             self.last_error = None
         except Exception as exc:
             self.last_error = safety.safe_error(exc)
@@ -506,6 +573,8 @@ class CryptoScanner:
             trending = client.trending()
         except Exception:
             trending = set()
+        self.store.save_universe(coins, trending)
+        self._map_binance(now)
 
         events = self.store.events()
         recent = {e["coin_id"] for e in events
@@ -539,19 +608,7 @@ class CryptoScanner:
             except Exception:
                 pass
 
-        # Headlines for fresh moves ("why is it moving?"); refreshed every few hours while the move is recent.
-        if self.news_factory:
-            have = self.store.news()
-            fresh = [e for e in events if parse_iso(e["detected_at"]) >= now - timedelta(hours=24)]
-            stale = iso(now - timedelta(hours=NEWS_MAX_AGE_H))
-            todo = [e for e in fresh if have.get(e["coin_id"], {}).get("fetched_at", "") < stale]
-            if todo:
-                reader = self.news_factory()
-                for e in list({e["coin_id"]: e for e in todo}.values())[:NEWS_PER_RUN]:
-                    try:
-                        self.store.save_news(e["coin_id"], reader.search(e["name"], e["symbol"]))
-                    except Exception:
-                        pass  # news are optional
+        self._news(events, now)
 
         # Fill gaps (app was off) from CoinGecko hourly history, so horizons and
         # strategy simulations see a continuous path for the first week after detection.
@@ -564,12 +621,97 @@ class CryptoScanner:
             stale = self.backfilled.get(e["coin_id"], now - timedelta(days=1)) < now - timedelta(hours=6)
             if stale and max_gap(prices.get(e["coin_id"], []), e["detected_at"], end) > timedelta(minutes=90):
                 gaps.append(e["coin_id"])
-        for cid in list(dict.fromkeys(gaps))[:4] + ([BENCHMARK] if gaps else []):
+        for cid in list(dict.fromkeys(gaps))[:GAPS_PER_RUN] + ([BENCHMARK] if gaps else []):
             self.backfilled[cid] = now
             try:
                 self.store.save_prices(cid, client.chart(cid, days=TRACK_DAYS))
             except Exception:
                 pass
+
+    def _news(self, events: list[dict], now: datetime) -> None:
+        """Headlines for fresh moves ("why is it moving?"); refreshed every few hours while the move is recent."""
+        if not self.news_factory:
+            return
+        have = self.store.news()
+        fresh = [e for e in events if parse_iso(e["detected_at"]) >= now - timedelta(hours=24)
+                 and e.get("origin", "live") == "live"]
+        stale = iso(now - timedelta(hours=NEWS_MAX_AGE_H))
+        todo = [e for e in fresh if have.get(e["coin_id"], {}).get("fetched_at", "") < stale]
+        if todo:
+            reader = self.news_factory()
+            for e in list({e["coin_id"]: e for e in todo}.values())[:NEWS_PER_RUN]:
+                try:
+                    self.store.save_news(e["coin_id"], reader.search(e["name"], e["symbol"]))
+                except Exception:
+                    pass  # news are optional
+
+    @staticmethod
+    def _binance_ticker() -> list[dict]:
+        resp = requests.get(BINANCE_TICKER, timeout=30, headers={"User-Agent": "insider-radar/1.0"})
+        resp.raise_for_status()
+        return resp.json()
+
+    def _map_binance(self, now: datetime, ticker: list[dict] | None = None) -> None:
+        """Which Binance pairs are the same coins as the CoinGecko universe: compare both prices taken now.
+        (Checking later, inside the quick scan, would reject exactly the coins that just moved.)"""
+        try:
+            ticker = ticker if ticker is not None else self._binance_ticker()
+        except requests.RequestException:
+            return  # keep the previous map
+        prices = {t["symbol"]: float(t["lastPrice"]) for t in ticker if float(t.get("lastPrice") or 0) > 0}
+        pairs = {}
+        for sym, u in self.store.universe().items():
+            p, ref = prices.get(f"{sym}USDT"), u.get("current_price")
+            if p and ref and abs(p / ref - 1) <= MAP_PRICE_MATCH:
+                pairs[f"{sym}USDT"] = sym
+        self.store.save_binance_map(pairs)
+        self.store.save_ticks({k: v for k, v in prices.items() if k.endswith("USDT")}, now)
+
+    def _run_quick(self, now: datetime, ticker: list[dict] | None = None) -> None:
+        """Binance 24h ticker -> the same coin dicts the full scan builds, using the hourly universe for
+        market cap, ATH and 7d change, and our own ticks for the 1h change."""
+        universe, pair_map = self.store.universe(), self.store.binance_map()
+        if not universe or not pair_map:
+            raise RuntimeError("brak listy tokenów: pierwszy pełny skan CoinGecko jeszcze nie przeszedł")
+        if ticker is None:
+            ticker = self._binance_ticker()
+        prices = {t["symbol"]: float(t["lastPrice"]) for t in ticker
+                  if t["symbol"].endswith("USDT") and float(t.get("lastPrice") or 0) > 0}
+        hour_ago = self.store.ticks_around(now - timedelta(hours=1))
+        self.store.save_ticks(prices, now)
+        stats = {t["symbol"]: t for t in ticker}
+
+        coins = []
+        for pair, price in prices.items():
+            u = universe.get(pair_map.get(pair, ""))
+            if not u:
+                continue  # not in the radar's universe, or the same ticker is a different coin on Binance
+            t, before = stats[pair], hour_ago.get(pair)
+            coins.append({**u, "current_price": price,
+                          "total_volume": max(float(t.get("quoteVolume") or 0), u.get("total_volume") or 0),
+                          "price_change_percentage_24h_in_currency": float(t.get("priceChangePercent") or 0),
+                          "price_change_percentage_1h_in_currency": (price / before - 1) * 100 if before else 0})
+
+        events = self.store.events()
+        recent = {e["coin_id"] for e in events if parse_iso(e["detected_at"]) >= now - timedelta(hours=DEDUPE_HOURS)}
+        trending, new = self.store.trending(), 0
+        for coin in coins:
+            trig = triggers_for(coin, trending)
+            if trig and coin["id"] not in recent:
+                self.store.add_event(coin, trig, now)
+                new += 1
+        self.last_new = new
+        events = self.store.events()
+
+        # Price snapshots for tracked coins that trade on Binance (+ BTC benchmark); the rest wait for the full scan.
+        stamp = iso(now)
+        tracked = {e["coin_id"] for e in events if parse_iso(e["detected_at"]) >= now - timedelta(days=TRACK_DAYS)}
+        for coin in coins:
+            if coin["id"] in tracked:
+                self.store.save_prices(coin["id"], [(stamp, coin["current_price"])])
+        if BENCHMARK_PAIR in prices:
+            self.store.save_prices(BENCHMARK, [(stamp, prices[BENCHMARK_PAIR])])
+        self._news(events, now)
 
     def trigger(self) -> None:
         threading.Thread(target=self.run_once, daemon=True).start()

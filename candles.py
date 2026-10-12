@@ -18,6 +18,7 @@ radar recorded (same ticker on Binance can be a different coin).
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
@@ -33,7 +34,7 @@ HOURLY_BEFORE_H = 24
 HOURLY_DAYS = 7
 PRICE_TOLERANCE = 0.15        # source price at detection vs. our recorded price
 MIN_POOL_LIQUIDITY = 20_000   # $ - ignore dust pools on GeckoTerminal
-GT_CALLS_PER_RUN = 10         # GeckoTerminal's free API rate-limits hard (429) well below its documented 30/min
+GT_CALLS_PER_RUN = int(os.environ.get("GT_CALLS_PER_RUN", "10"))  # GeckoTerminal rate-limits hard (429)
 GT_SPACING_S = 6.5            # ...so calls are spaced out, and a 429 pauses it until the next run
 RESOLVE_PER_RUN = 20          # new signals matched to a source per run
 RETRY_NONE_H = 6              # "no source found" is retried while the signal's minute window is open
