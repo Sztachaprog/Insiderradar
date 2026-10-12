@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}Mój portfel · Insider Radar{% endblock %}
+{% block head %}
+<style>
+  .pf-settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; align-items: end; }
+  .pf-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin: 16px 0; }
+  .pf-cards .card { padding: 16px; }
+  .pf-cards h3 { margin: 0 0 2px; font: 700 15px "Space Grotesk", sans-serif; }
+  .pf-cards .big { font: 700 24px "JetBrains Mono", monospace; margin: 6px 0 2px; }
+  .pf-cards .row { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+  .pf-cards .row b { color: var(--text); font-family: "JetBrains Mono", monospace; font-weight: 600; }
+  .pf-strats { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; }
+  .pf-warn { color: var(--red, #e5484d); font-size: 12.5px; }
+</style>
+{% endblock %}
+{% block content %}
+  <p class="muted" style="margin:0 0 14px; max-width: 980px">Symulacja Twojego portfela na sygnałach z aplikacji, na papierze. Wpisz kapitał i podział, a strona policzy,
+    ile każda część zarobiłaby od wybranej daty. <b>Ustawienia zapisuje tylko ta przeglądarka</b> (na telefonie i komputerze ustawiasz osobno).</p>
+
+  <section class="card section">
+    <h2>Ustawienia</h2>
+    <div class="pf-settings">
+      <label>Kapitał $<input type="text" inputmode="numeric" id="capital"></label>
+      <label>Spółki %<input type="text" inputmode="numeric" id="split-stocks"></label>
+      <label>Krypto lev %<input type="text" inputmode="numeric" id="split-lev"></label>
+      <label>Krypto spot %<input type="text" inputmode="numeric" id="split-spot"></label>
+      <label>Dźwignia (maks. {{ max_lev }}×)<input type="text" inputmode="decimal" id="lev"></label>
+      <label title="ile % części lev traci jeden stop-loss">Ryzyko na transakcję lev %<input type="text" inputmode="decimal" id="risk"></label>
+      <label>Spółki: maks. pozycji<input type="text" inputmode="numeric" id="maxpos-stocks"></label>
+      <label>Spot: maks. pozycji<input type="text" inputmode="numeric" id="maxpos-spot"></label>
+      <label>Spółki: min. ocena<input type="text" inputmode="numeric" id="minscore-stocks"></label>
+      <label>Spot: min. ocena<input type="text" inputmode="numeric" id="minscore-spot"></label>
+      <label>Start od<input type="date" id="start"></label>
+    </div>
+    <div id="split-warn" class="pf-warn" style="margin-top:8px"></div>
+    <div style="margin-top:12px"><b style="font-size:13px">Krypto spot: źródła sygnałów</b>
+      <div class="pf-strats">
+        <label class="check"><input type="checkbox" class="spot-src" value="whales"> Wieloryby (trzymane 30 dni)</label>
+        <label class="check"><input type="checkbox" class="spot-src" value="radar"> Radar krypto (trzymane 7 dni)</label>
+      </div></div>
+    <div style="margin-top:12px"><b style="font-size:13px">Krypto lev: strategie</b>
+      <span class="muted" style="font-size:12.5px">(w nawiasie: transakcje na żywo i średni wynik na transakcję, bez dźwigni)</span>
+      <div class="pf-strats">{% for s in strategies %}
+        <label class="check"><input type="checkbox" class="strat" value="{{ s.key }}"> {{ s.name }}{% if s.side == 'short' and 'short' not in s.name.lower() %} (short){% endif %}
+          <span class="muted">({{ s.n }}{% if s.avg is not none %}, {{ s.avg|pct }}{% endif %})</span></label>{% endfor %}</div></div>
+    <p class="muted" style="font-size:12.5px; margin:12px 0 0">Spółki trzymane są miesiąc (20 sesji). Lev: wielkość pozycji tak, żeby jeden stop-loss zabierał ustawiony % części lev;
+      depozyt = pozycja ÷ dźwignia; strata nigdy nie przekracza depozytu (likwidacja); jedna pozycja na token. Spółki i spot: równe części po kapitał ÷ maks. pozycji.
+      Gdy brakuje wolnych środków albo miejsca, sygnał jest pomijany, jak w prawdziwym portfelu. Koszty transakcji są już odjęte.</p>
+    <button class="ghost" id="reset" style="margin-top:10px">Przywróć domyślne</button>
+  </section>
+
+  <div class="pf-cards" id="cards"></div>
+
+  <section class="card section">
+    <h2>Wartość portfela</h2>
+    <p class="note">Zrealizowane wyniki narastająco; ostatni punkt (teraz) obejmuje też otwarte pozycje.</p>
+    <div class="chart-box"><canvas id="equity"></canvas></div>
+  </section>
+
+  <section class="card section table-wrap">
+    <h2>Otwarte pozycje</h2>
+    <table><thead><tr><th>Token / spółka</th><th>Część</th><th>Źródło</th><th>Od</th><th class="num">Pozycja $</th><th class="num">Depozyt $</th><th class="num">Wynik</th><th class="num">Wynik $</th></tr></thead>
+      <tbody id="open-rows"></tbody></table>
+    <p class="muted" id="open-empty" style="display:none">Brak otwartych pozycji.</p>
+  </section>
+
+  <section class="card section table-wrap">
+    <h2>Zamknięte transakcje</h2>
+    <table><thead><tr><th>Token / spółka</th><th>Część</th><th>Źródło</th><th>Wejście</th><th>Wyjście</th><th class="num">Pozycja $</th><th class="num">Wynik</th><th class="num">Wynik $</th></tr></thead>
+      <tbody id="closed-rows"></tbody></table>
+    <p class="muted" id="closed-empty" style="display:none">Jeszcze nic się nie zamknęło.</p>
+  </section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='portfolio.js') }}?v={{ asset_version }}"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+(() => {
+  const TRADES = {{ trades|tojson }}, DEFAULTS = {{ defaults|tojson }}, NOW = {{ now|tojson }}, MAX_LEV = {{ max_lev|tojson }};
+  const KEY = "portfel.v1";
+  const LABEL = { stocks: "Spółki", lev: "Krypto lev", spot: "Krypto spot" };
+  const $ = id => document.getElementById(id);
+  const clone = o => JSON.parse(JSON.stringify(o));
+  const usd = v => (v < 0 ? "−" : "") + Math.abs(v).toLocaleString("pl-PL", { maximumFractionDigits: 0 }) + " $";
+  const pct = v => v === null || v === undefined ? "—" : (v >= 0 ? "+" : "−") + Math.abs(v * 100).toFixed(1) + "%";
+  const tone = v => v > 0 ? "up" : v < 0 ? "down" : "";
+  const day = iso => iso ? new Date(iso).toLocaleString("pl-PL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
+  const num = (v, d) => { const x = parseFloat(String(v).replace(",", ".")); return isFinite(x) ? x : d; };
+  const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  let settings;
+  try { settings = Object.assign(clone(DEFAULTS), JSON.parse(localStorage.getItem(KEY) || "{}")); }
+  catch (e) { settings = clone(DEFAULTS); }
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(settings)); } catch (e) {} };
+
+  function fill() {
+    $("capital").value = settings.capital;
+    for (const b of ["stocks", "lev", "spot"]) $("split-" + b).value = settings.split[b];
+    $("lev").value = settings.lev; $("risk").value = settings.risk;
+    for (const b of ["stocks", "spot"]) { $("maxpos-" + b).value = settings.maxPos[b]; $("minscore-" + b).value = settings.minScore[b]; }
+    $("start").value = settings.start ? settings.start.slice(0, 10) : "";
+    document.querySelectorAll(".spot-src").forEach(el => el.checked = settings.spotSources.includes(el.value));
+    document.querySelectorAll(".strat").forEach(el => el.checked = settings.strategies === null || settings.strategies.includes(el.value));
+  }
+
+  function read() {
+    settings.capital = Math.max(0, num($("capital").value, DEFAULTS.capital));
+    for (const b of ["stocks", "lev", "spot"]) settings.split[b] = Math.max(0, num($("split-" + b).value, 0));
+    settings.lev = Math.min(MAX_LEV, Math.max(1, num($("lev").value, DEFAULTS.lev)));
+    settings.risk = Math.min(20, Math.max(0.1, num($("risk").value, DEFAULTS.risk)));
+    for (const b of ["stocks", "spot"]) {
+      settings.maxPos[b] = Math.max(1, Math.round(num($("maxpos-" + b).value, DEFAULTS.maxPos[b])));
+      settings.minScore[b] = Math.max(0, num($("minscore-" + b).value, 0));
+    }
+    settings.start = $("start").value ? $("start").value + "T00:00:00Z" : "";
+    settings.spotSources = [...document.querySelectorAll(".spot-src:checked")].map(el => el.value);
+    settings.strategies = [...document.querySelectorAll(".strat:checked")].map(el => el.value);
+  }
+
+  let chart;
+  function render() {
+    const total = settings.split.stocks + settings.split.lev + settings.split.spot;
+    $("split-warn").textContent = Math.abs(total - 100) > 0.01 ? `Podział sumuje się do ${total}%, a nie 100%. Reszta zostaje w gotówce.` : "";
+    const r = simulatePortfolio(TRADES, settings, NOW, DEFAULTS);
+    const bs = ["stocks", "lev", "spot"].map(b => [b, r.buckets[b]]);
+    const start = bs.reduce((a, [, x]) => a + x.start, 0), eq = bs.reduce((a, [, x]) => a + x.equity, 0);
+    const cash = settings.capital * Math.max(0, 100 - total) / 100;
+    const card = (title, x, extra) => `<div class="card"><h3>${title}</h3><span class="muted" style="font-size:12px">start ${usd(x.start)}</span>
+      <div class="big ${tone(x.equity - x.start)}">${usd(x.equity)}</div>
+      <div class="row"><span>wynik</span><b class="${tone(x.equity - x.start)}">${usd(x.equity - x.start)} (${pct(x.start ? x.equity / x.start - 1 : null)})</b></div>${extra}</div>`;
+    let html = card("Cały portfel", { start: start + cash, equity: eq + cash },
+      `<div class="row"><span>otwarte pozycje</span><b>${r.open.length}</b></div><div class="row"><span>zamknięte transakcje</span><b>${r.closed.length}</b></div>`);
+    for (const [b, x] of bs) {
+      html += card(LABEL[b] + ` (${settings.split[b]}%)`, x,
+        `<div class="row"><span>zrealizowane / otwarte</span><b>${usd(x.realized)} / ${usd(x.unrealized)}</b></div>
+         <div class="row"><span>transakcje · trafność</span><b>${x.trades} · ${x.win_rate === null ? "—" : Math.round(x.win_rate * 100) + "%"}</b></div>
+         <div class="row"><span>wolne / zajęte</span><b>${usd(x.cash)} / ${usd(x.committed)}</b></div>
+         <div class="row"><span>pominięte sygnały</span><b>${x.skipped}</b></div>`);
+    }
+    $("cards").innerHTML = html;
+
+    const row = (p, closed) => `<tr onclick="location.href='${esc(p.url)}'"><td><b class="mono">${esc(p.sym)}</b></td><td>${LABEL[p.b]}</td><td>${esc(p.name)}</td>
+      <td class="mono" data-sort="${p.in}">${day(p.in)}</td>${closed ? `<td class="mono" data-sort="${p.out}">${day(p.out)}</td>` : ""}
+      <td class="num">${usd(p.size)}</td>${closed ? "" : `<td class="num">${usd(p.margin)}</td>`}
+      <td class="num ${tone(p.ret)}">${pct(p.ret)}</td><td class="num ${tone(p.pnl)}"><b>${usd(p.pnl)}</b></td></tr>`;
+    const open = [...r.open].sort((a, b) => b.in < a.in ? -1 : 1), closed = [...r.closed].sort((a, b) => b.out < a.out ? -1 : 1).slice(0, 100);
+    $("open-rows").innerHTML = open.map(p => row(p, false)).join("");
+    $("closed-rows").innerHTML = closed.map(p => row(p, true)).join("");
+    $("open-empty").style.display = open.length ? "none" : "";
+    $("closed-empty").style.display = closed.length ? "none" : "";
+
+    // Total value over time: each bucket's realized curve, summed (+ the money left out of the split).
+    const pts = [];
+    for (const [b, x] of bs) for (const [t, v] of x.curve) pts.push([t, b, v]);
+    pts.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+    const last = Object.fromEntries(bs.map(([b, x]) => [b, x.start]));
+    const first = settings.start || (TRADES.length ? TRADES[0].in : NOW);
+    const series = [{ x: Date.parse(first), y: start + cash }];
+    for (const [t, b, v] of pts) { last[b] = v; series.push({ x: Date.parse(t), y: Object.values(last).reduce((a, c) => a + c, 0) + cash }); }
+    series.push({ x: Date.parse(NOW), y: eq + cash });
+    const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+    if (typeof Chart === "undefined") return;
+    if (chart) chart.destroy();
+    chart = new Chart($("equity"), {
+      type: "line", data: { datasets: [{ label: "Portfel", data: series, borderColor: css("--blue"), borderWidth: 2, stepped: true, pointRadius: 0, pointHoverRadius: 5 }] },
+      options: { maintainAspectRatio: false, interaction: { mode: "nearest", intersect: false },
+        plugins: { legend: { display: false }, tooltip: { callbacks: { title: i => day(new Date(i[0].parsed.x).toISOString()), label: c => " " + usd(c.parsed.y) } } },
+        scales: { x: { type: "linear", grid: { display: false }, ticks: { color: css("--muted"), maxTicksLimit: 6, callback: v => new Date(v).toLocaleDateString("pl-PL", { day: "2-digit", month: "2-digit" }) } },
+                  y: { grid: { color: css("--line") }, border: { display: false }, ticks: { color: css("--muted"), callback: v => usd(v) } } } },
+    });
+  }
+
+  fill(); render();
+  document.querySelectorAll(".pf-settings input, .spot-src, .strat").forEach(el =>
+    el.addEventListener("change", () => { read(); save(); render(); }));
+  $("reset").addEventListener("click", () => { settings = clone(DEFAULTS); save(); fill(); render(); });
+})();
+</script>
+{% endblock %}

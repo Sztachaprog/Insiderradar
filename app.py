@@ -31,6 +31,7 @@ import form4_scanner as fs
 import history
 import market
 import signals
+import portfolio
 import safety
 import search
 import news
@@ -615,7 +616,7 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
     app = Flask(__name__)
     # Shared CSS/JS: the version in the link changes with the content, so browsers never keep a stale copy.
     app.jinja_env.globals["asset_version"] = hashlib.sha1(b"".join(
-        (Path(app.static_folder) / f).read_bytes() for f in ("app.css", "app.js"))).hexdigest()[:10]
+        (Path(app.static_folder) / f).read_bytes() for f in ("app.css", "app.js", "portfolio.js"))).hexdigest()[:10]
     app.config["BUILD_ID"] = crypto.iso(crypto.utcnow())  # static export: pages poll version.json for a newer one
     store = store or Store(DB_PATH)
     cstore = crypto_store or crypto.CryptoStore(store.path)
@@ -884,6 +885,39 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         tabs, active = strategy_tabs("history")
         return render_template("positions.html", mode="history", positions=closed, strategy_names=names, tabs=tabs,
                                active=active, heading="Historia transakcji", **common(page="strategies"))
+
+    @app.get("/portfel")
+    def portfolio_page():
+        """Paper portfolio: the trades of every section in one format; the page sizes them with the
+        viewer's own capital and split (kept in their browser), see portfolio.py."""
+        now = crypto.utcnow()
+        stock_rows, _ = build_rows(store.all(), {}, market_data())
+        for r in stock_rows:
+            r["url"] = url_for("filing", accession=r["accession"])
+        cd = crypto_data()
+        radar, _ = build_crypto_rows(cd, {})
+        for r in radar:
+            r["url"] = url_for("crypto_event", event_id=r["id"])
+        wtokens = whales.build(wstore)["tokens"]
+        for t in wtokens:
+            t["url"] = url_for("whale_token", token=t["token"])
+        positions, _ = journal_positions(cd)
+        for t in positions:
+            t["url"] = url_for("position", key=t["strategy_key"], event_id=t["event_id"])
+        created = {f"c{s['id']}": s["created_at"] for s in cstore.strategies()}
+        trades = portfolio.collect(stock_rows, radar, wtokens, positions, created, now)
+        # Strategies to choose from, with their live record so far.
+        names = [(k, n, p) for k, n, _, p in strategy.PRESETS if k not in strategy.REFERENCE_ONLY] + \
+                [(f"c{s['id']}", s["name"], s["params"]) for s in cstore.strategies()]
+        strategies = []
+        for key, name, params in names:
+            done = [t["ret"] for t in trades if t["b"] == "lev" and t["src"] == key and t["out"]]
+            strategies.append({"key": key, "name": name, "side": {**strategy.DEFAULTS, **params}["side"],
+                               "n": len(done), "avg": sum(done) / len(done) if done else None})
+        # Default: every strategy except the deliberate loser kept as a control.
+        defaults = {**portfolio.DEFAULTS, "strategies": [s["key"] for s in strategies if s["key"] != "chase"]}
+        return render_template("portfolio.html", trades=trades, defaults=defaults, strategies=strategies,
+                               now=crypto.iso(now), max_lev=strategy.LEVERAGE, **common(page="portfolio"))
 
     @app.get("/krypto/strategie/szukanie")
     def strategy_search():

@@ -231,7 +231,7 @@ def export(parts, base_path: str) -> int:
         base_url = "http://localhost" + base_path.rstrip("/")
 
         pages = ["/", "/wyniki", "/krypto", "/krypto/wyniki", "/krypto/strategie", "/wieloryby",
-                 "/krypto/strategie/otwarte", "/krypto/strategie/historia", "/krypto/strategie/szukanie", "/krypto/otwarte", "/wieloryby/otwarte"]
+                 "/krypto/strategie/otwarte", "/krypto/strategie/historia", "/krypto/strategie/szukanie", "/portfel", "/krypto/otwarte", "/wieloryby/otwarte"]
         for code in "PS":
             rows, _ = webapp.build_rows(store.all(), {"code": code, "min": "0", "all_owners": "1", "plan": "1"},
                                         {"tracked": store.tracked(), "prices": store.prices(),
