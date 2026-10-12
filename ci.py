@@ -257,6 +257,7 @@ def export(parts, base_path: str) -> int:
             out = SITE / path.strip("/") / "index.html" if path != "/" else SITE / "index.html"
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_bytes(resp.data)
+        shutil.copytree(Path(flask_app.static_folder), SITE / "static")   # CSS/JS shared by every page
         (SITE / ".nojekyll").write_text("")
         (SITE / "version.json").write_text(json.dumps({"build": flask_app.config["BUILD_ID"]}))
         log(f"eksport: {len(pages) - failed} stron do {SITE}/")

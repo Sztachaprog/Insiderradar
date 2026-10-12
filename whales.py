@@ -56,6 +56,7 @@ BIG_TX_USD = 1e6
 HOLDERS_PER_RUN = int(os.environ.get("WHALE_HOLDERS_PER_RUN", "25"))
 TRANSFERS_PER_RUN = int(os.environ.get("WHALE_TRANSFERS_PER_RUN", "60"))
 TRANSFER_SYNC_HOURS = 12
+TRANSFER_KEEP_DAYS = 90   # the whale pages and signals look back 90 days; older transfers are dropped
 TREASURY_SHARE = 0.05       # one wallet with >= 5% of supply is a team/treasury/vesting wallet, not a trader
 SIGNAL_SCORE = 60
 HORIZONS = [(7, "7 dni"), (30, "30 dni"), (90, "90 dni")]
@@ -341,9 +342,30 @@ class WhaleStore:
 
     # balances & transfers
     def save_balance(self, address: str, token: str, ts: str, balance: float, share: float | None) -> None:
+        """Only changes are stored: an unchanged balance adds nothing (most whales just hold)."""
+        address = norm(address)
         with self._conn() as c:
+            last = c.execute("SELECT balance FROM whale_balances WHERE address = ? AND token = ? AND ts < ? "
+                             "ORDER BY ts DESC LIMIT 1", (address, token, ts)).fetchone()
+            if last and last[0] == balance:
+                return
             c.execute("INSERT OR REPLACE INTO whale_balances VALUES (?, ?, ?, ?, ?)",
-                      (norm(address), token, ts, balance, share))
+                      (address, token, ts, balance, share))
+
+    def prune(self, now: datetime) -> int:
+        """Drop balance rows that repeat the previous one (stored before only changes were kept)
+        and transfers older than the pages look at. Returns the number of rows removed."""
+        with self._conn() as c:
+            removed = c.execute("""DELETE FROM whale_balances WHERE rowid IN (
+                SELECT rowid FROM (SELECT rowid, balance,
+                    LAG(balance) OVER (PARTITION BY address, token ORDER BY ts) AS prev FROM whale_balances)
+                WHERE balance = prev)""").rowcount
+            removed += c.execute("DELETE FROM whale_transfers WHERE ts < ?",
+                                 (crypto.iso(now - timedelta(days=TRANSFER_KEEP_DAYS)),)).rowcount
+        if removed > 1000:
+            with self._conn() as c:
+                c.execute("VACUUM")   # give the space back, so the stored file shrinks too
+        return removed
 
     def balances(self) -> dict[tuple[str, str], list[tuple[str, float, float | None]]]:
         out: dict[tuple, list] = {}
@@ -620,6 +642,7 @@ class WhaleScanner:
                     errors.append(f"{chain}: {safety.safe_error(exc)}")
             self.last_new = len(set(self.store.whales()) - before)
             build(self.store, now)  # flags new accumulation signals at today's price
+            self.store.prune(now)
             self.last_error = "; ".join(errors) or None
         except Exception as exc:
             self.last_error = safety.safe_error(exc)

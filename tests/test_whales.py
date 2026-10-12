@@ -246,3 +246,24 @@ def test_whales_move_to_their_own_database(tmp_path):
         assert c.execute("SELECT price FROM whale_signals").fetchone() == (1.5,)
     assert "crypto_events" not in tables
     assert own.import_from(tmp_path / "form4.db")["whale_signals"] == 1   # running it again is harmless
+
+
+def test_balance_is_stored_only_when_it_changes(tmp_path):
+    store = whales.WhaleStore(tmp_path / "w.db")
+    for ts, bal in [("2026-10-01T00:00:00Z", 100.0), ("2026-10-01T01:00:00Z", 100.0),
+                    ("2026-10-01T02:00:00Z", 80.0), ("2026-10-01T03:00:00Z", 80.0)]:
+        store.save_balance("0xAA", "tok", ts, bal, None)
+    assert [b for _, b, _ in store.balances()[("0xaa", "tok")]] == [100.0, 80.0]
+
+
+def test_prune_drops_repeats_and_old_transfers(tmp_path):
+    store = whales.WhaleStore(tmp_path / "w.db")
+    now = datetime(2026, 10, 12, tzinfo=timezone.utc)
+    with store._conn() as c:   # rows written before only changes were kept
+        c.executemany("INSERT INTO whale_balances VALUES (?, ?, ?, ?, NULL)",
+                      [("0xaa", "tok", f"2026-10-0{d}T00:00:00Z", b) for d, b in [(1, 5), (2, 5), (3, 7), (4, 7)]])
+        c.executemany("INSERT INTO whale_transfers VALUES (?, 0, '0xaa', 'tok', 'T', 'in', 1, 1, '', '', '', ?)",
+                      [("old", "2026-01-01T00:00:00Z"), ("new", "2026-10-10T00:00:00Z")])
+    assert store.prune(now) == 3
+    assert [b for _, b, _ in store.balances()[("0xaa", "tok")]] == [5, 7]
+    assert [t["tx"] for t in store.transfers()] == ["new"]

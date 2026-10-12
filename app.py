@@ -9,6 +9,7 @@ parsed Form 4 in SQLite; the page filters the stored filings instantly.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -609,6 +610,9 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
     SCAN_DISABLED=1 browses a downloaded database locally without scanning."""
     start_background = start_background and os.environ.get("SCAN_DISABLED") != "1"
     app = Flask(__name__)
+    # Shared CSS/JS: the version in the link changes with the content, so browsers never keep a stale copy.
+    app.jinja_env.globals["asset_version"] = hashlib.sha1(b"".join(
+        (Path(app.static_folder) / f).read_bytes() for f in ("app.css", "app.js"))).hexdigest()[:10]
     app.config["BUILD_ID"] = crypto.iso(crypto.utcnow())  # static export: pages poll version.json for a newer one
     store = store or Store(DB_PATH)
     cstore = crypto_store or crypto.CryptoStore(store.path)
