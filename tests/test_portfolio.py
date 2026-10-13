@@ -117,3 +117,56 @@ def test_a_tight_stop_never_exceeds_the_leverage():
     r = portfolio.simulate([trade("lev", 0, 5, 0.01, sl=0.002)], {"capital": 10000, "lev": 3}, NOW)
     (t,) = r["closed"]                         # 2% risk / 0.2% stop would be 10x the bucket: capped at 3x
     assert t["size"] == pytest.approx(3000 * 3) and t["margin"] == pytest.approx(3000)
+
+
+def test_page_script_compiles():
+    """The page's own script (profiles, settings, tables) must at least parse: no JS engine runs it in CI."""
+    import re
+    mini_racer = pytest.importorskip("py_mini_racer")
+    page = (ROOT / "templates" / "portfolio.html").read_text(encoding="utf-8")
+    script = page.split("<script>")[-1].split("</script>")[0]
+    script = re.sub(r"\{\{.*?\}\}", "null", script)             # Jinja values
+    mini_racer.MiniRacer().eval("new Function(" + json.dumps(script) + ")")
+
+
+FAKE_DOM = """
+var store = {}, els = {}, listeners = {};
+function el(id) {
+  if (!els[id]) els[id] = { id: id, value: "", innerHTML: "", textContent: "", disabled: false, checked: false,
+    style: {}, dataset: {}, addEventListener: function (ev, fn) { listeners[id + ":" + ev] = fn; } };
+  return els[id];
+}
+var document = { getElementById: el, querySelectorAll: function () { return []; },
+                 querySelector: function (q) { return el(q); }, documentElement: {} };
+var localStorage = { getItem: function (k) { return k in store ? store[k] : null; },
+                     setItem: function (k, v) { store[k] = String(v); } };
+var getComputedStyle = function () { return { getPropertyValue: function () { return ""; } }; };
+var confirm = function () { return true; };
+function fire(id, ev) { listeners[id + ":" + (ev || "click")]({ target: el(id) }); }
+"""
+
+
+def test_page_profiles_work_in_a_js_engine():
+    import re
+    mini_racer = pytest.importorskip("py_mini_racer")
+    page = (ROOT / "templates" / "portfolio.html").read_text(encoding="utf-8")
+    script = page.split("<script>")[-1].split("</script>")[0]
+    values = {"trades|tojson": json.dumps(random_trades(1)), "defaults|tojson": json.dumps(portfolio.DEFAULTS),
+              "now|tojson": json.dumps(NOW), "max_lev|tojson": "3"}
+    script = re.sub(r"\{\{\s*(.*?)\s*\}\}", lambda m: values[m.group(1)], script)
+    ctx = mini_racer.MiniRacer()
+    ctx.eval(FAKE_DOM)
+    ctx.eval("store['portfel.v1'] = JSON.stringify({capital: 5000})")          # settings saved before profiles
+    ctx.eval((ROOT / "static" / "portfolio.js").read_text(encoding="utf-8"))
+    ctx.eval(script)
+    state = lambda: json.loads(ctx.eval("store['portfel.v2']"))
+    s = state()
+    assert len(s["profiles"]) == 1 and s["profiles"][0]["settings"]["capital"] == 5000   # old settings kept
+    assert "Portfel 1" in ctx.eval("els['profiles'].innerHTML")
+    ctx.eval("fire('pf-new'); fire('pf-copy'); els['pf-name'].value = 'Agresywny'; fire('pf-name', 'change')")
+    s = state()
+    assert [p["name"] for p in s["profiles"]] == ["Portfel 1", "Portfel 2", "Agresywny"]
+    assert s["active"] == s["profiles"][2]["id"]
+    assert ctx.eval("els['#compare tbody'].innerHTML").count("<tr") == 3
+    ctx.eval("fire('pf-delete')")
+    assert len(state()["profiles"]) == 2
