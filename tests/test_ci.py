@@ -30,3 +30,15 @@ def test_export_step_restores_status_and_ignores_unknown_keys(tmp_path, monkeypa
     monkeypatch.setattr(ci, "STATUS", status)
     parts = ci.scan(set(), force_whales=False)
     assert parts[5].last_run == "19:46:00" and parts[5].last_new == 3
+
+
+def test_retired_tables_are_dropped_once(tmp_path):
+    import sqlite3
+    db = tmp_path / "r.db"
+    with sqlite3.connect(db) as c:
+        c.execute("CREATE TABLE ict_bars (ts INTEGER PRIMARY KEY)")
+        c.execute("CREATE TABLE keep_me (x)")
+    ci.drop_retired_tables(db)
+    ci.drop_retired_tables(db)                      # nothing left to do the second time
+    with sqlite3.connect(db) as c:
+        assert {r[0] for r in c.execute("SELECT name FROM sqlite_master")} == {"keep_me"}

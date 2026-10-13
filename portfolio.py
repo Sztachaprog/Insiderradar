@@ -13,7 +13,7 @@ Trade: {"b": bucket, "src": source key, "name": source name, "sym": symbol, "in"
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 import crypto
 import strategy
@@ -36,17 +36,9 @@ DEFAULTS = {
 
 
 def collect(stock_rows: list[dict], radar_rows: list[dict], whale_tokens: list[dict],
-            lev_positions: list[dict], created: dict[str, str], now, ict_trades: dict | None = None) -> list[dict]:
-    """created: saved strategy key -> creation time (their live record starts there).
-    ict_trades: BTC session model key -> (name, trades), only those since it went live."""
+            lev_positions: list[dict], created: dict[str, str], now) -> list[dict]:
+    """created: saved strategy key -> creation time (their live record starts there)."""
     out = []
-    for key, (name, trades) in (ict_trades or {}).items():
-        for t in trades:
-            if t["ret"] is None:
-                continue
-            out.append({"b": "lev", "src": key, "name": name, "sym": "BTC", "in": crypto.iso(_utc(t["entry_ts"])),
-                        "out": crypto.iso(_utc(t["exit_ts"])) if t["exit_ts"] else None, "ret": t["ret"],
-                        "sl": t["risk"], "score": None, "url": t.get("url", "")})
     for r in stock_rows:
         perf, base_date = r.get("perf"), r.get("base_date")
         if not perf or not base_date or perf.get("now") is None:
@@ -86,10 +78,6 @@ def collect(stock_rows: list[dict], radar_rows: list[dict], whale_tokens: list[d
                     "sl": t["full"]["sl"], "score": t["row"]["signal"]["score"], "url": t.get("url", "")})
     out.sort(key=lambda t: (t["in"], t["b"], t["src"], t["sym"]))
     return out
-
-
-def _utc(ts: int):
-    return datetime.fromtimestamp(ts, timezone.utc)
 
 
 def _allowed(t: dict, s: dict) -> bool:

@@ -25,7 +25,6 @@ import app as webapp
 import backfill
 import candles
 import crypto
-import ict
 import form4_scanner as fs
 import market
 import news
@@ -123,6 +122,22 @@ class Schedule:
             c.execute("INSERT OR REPLACE INTO ci_schedule VALUES (?, ?)", (task, crypto.iso(now or crypto.utcnow())))
 
 
+RETIRED_TABLES = ("ict_bars",)   # BTC 5M candles of the removed ICT session model (~10 MB)
+
+
+def drop_retired_tables(path) -> None:
+    """Data of removed features: drop it once and give the space back."""
+    with sqlite3.connect(path) as c:
+        have = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        gone = [t for t in RETIRED_TABLES if t in have]
+        for t in gone:
+            c.execute(f"DROP TABLE {t}")
+    if gone:
+        with sqlite3.connect(path) as c:
+            c.execute("VACUUM")
+        log(f"usunięte stare tabele: {', '.join(gone)}")
+
+
 def scan(only: set[str], force_whales: bool, force_all: bool = False):
     store = webapp.Store(webapp.DB_PATH)
     cstore = crypto.CryptoStore(webapp.DB_PATH)
@@ -135,6 +150,7 @@ def scan(only: set[str], force_whales: bool, force_all: bool = False):
     wscanner = whales.WhaleScanner(wstore, whales.client_for)
 
     schedule = Schedule(webapp.DB_PATH)
+    drop_retired_tables(webapp.DB_PATH)
     due = {t: force_all or schedule.due(t) for t in EVERY}
     if "stocks" in only and due["stocks"]:
         if ua:
@@ -160,7 +176,6 @@ def scan(only: set[str], force_whales: bool, force_all: bool = False):
             schedule.done("coingecko_full")   # a failed scan that spent credits waits its turn too
         timed("świece i dziennik strategii", lambda: candles_and_journal(store, cstore, candle_status))
         timed("historia 2 mies. z Binance", lambda: run_backfill(history_status))
-        timed("BTC 5M (strategia ICT)", run_ict)
         if due["search"]:
             timed("szukanie strategii", lambda: run_search(cstore))
             schedule.done("search")
@@ -233,7 +248,7 @@ def export(parts, base_path: str) -> int:
         base_url = "http://localhost" + base_path.rstrip("/")
 
         pages = ["/", "/wyniki", "/krypto", "/krypto/wyniki", "/krypto/strategie", "/wieloryby",
-                 "/krypto/strategie/otwarte", "/krypto/strategie/historia", "/krypto/strategie/szukanie", "/krypto/strategie/ict", "/portfel", "/krypto/otwarte", "/wieloryby/otwarte"]
+                 "/krypto/strategie/otwarte", "/krypto/strategie/historia", "/krypto/strategie/szukanie", "/portfel", "/krypto/otwarte", "/wieloryby/otwarte"]
         for code in "PS":
             rows, _ = webapp.build_rows(store.all(), {"code": code, "min": "0", "all_owners": "1", "plan": "1"},
                                         {"tracked": store.tracked(), "prices": store.prices(),
@@ -321,15 +336,6 @@ def candles_and_journal(store, cstore, status: Status, now=None) -> None:
     written = sum(journal.record(key, params, strategy.backtest(recent, cdata["prices"], params, now, paths=paths)["trades"],
                                  is_final) for key, params in catalog)
     log(f"  dziennik strategii: zapisano/zaktualizowano {written} transakcji")
-
-
-def run_ict() -> None:
-    """5-minute BTC candles for the session model (ict.py): one call per scan once the history is in."""
-    try:
-        added = ict.update(ict.BarStore(webapp.DB_PATH), candles.CandleClient(), crypto.utcnow())
-        log(f"  BTC 5M: +{added} świec")
-    except Exception as exc:  # never break the scan
-        log(f"  BTC 5M: błąd {safety.safe_error(exc)}")
 
 
 def run_search(cstore) -> None:

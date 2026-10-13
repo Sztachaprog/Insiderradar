@@ -39,7 +39,6 @@ GT_SPACING_S = 6.5            # ...so calls are spaced out, and a 429 pauses it 
 RESOLVE_PER_RUN = 20          # new signals matched to a source per run
 RETRY_NONE_H = 6              # "no source found" is retried while the signal's minute window is open
 RES_MIN, RES_HOUR = 60, 3600
-RES_5M = 300   # BTC session model (ict.py)
 
 
 def epoch(iso: str) -> int:
@@ -131,7 +130,7 @@ class CandleClient:
 
     def binance(self, symbol: str, res: int, start: int, end: int) -> list[tuple]:
         """Candles with open time in [start, end) as (ts, o, h, l, c, quote_volume)."""
-        interval = {RES_MIN: "1m", RES_5M: "5m", RES_HOUR: "1h"}[res]
+        interval = "1m" if res == RES_MIN else "1h"
         out, cursor = [], start
         while cursor < end:
             resp = self.session.get(f"{BINANCE}/klines", timeout=30, params={
