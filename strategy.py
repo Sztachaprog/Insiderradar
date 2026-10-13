@@ -307,6 +307,10 @@ class Journal:
             c.row_factory = sqlite3.Row
             return [dict(r) for r in c.execute(sql, args)]
 
+    def delete(self, strategy: str) -> None:
+        with sqlite3.connect(self.path) as c:
+            c.execute("DELETE FROM sim_trades WHERE strategy = ?", (strategy,))
+
     def record(self, strategy: str, params: dict, trades: list[dict], is_final) -> int:
         """Upsert trades that are not final yet; is_final(trade) decides when a trade freezes."""
         ver = version(params)

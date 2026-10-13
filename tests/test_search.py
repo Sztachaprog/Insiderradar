@@ -72,11 +72,16 @@ def test_search_finds_a_real_edge_and_checks_it_on_newer_signals():
 
 def test_passing_rules_are_tracked_live_once(tmp_path):
     cstore = crypto.CryptoStore(tmp_path / "c.db")
-    rule = {"params": {"triggers": ["dump24"], "tp": 0.1, "sl": 0.03, "hold_h": 4}, "passed": True}
+    rule = {"params": {"triggers": ["move1h"], "tp": 0.1, "sl": 0.03, "hold_h": 4}, "passed": True}
     result = {"rules": [rule, {"params": {"triggers": ["pump24"]}, "passed": False}]}
-    added = search.track_passing(result, cstore)
+    rows = [row(1, triggers=("move1h",), ch24=0.0), row(2, triggers=("pump24",))]
+    added = search.track_passing(result, cstore, rows)
     assert len(added) == 1 and added[0].startswith(search.AUTO_PREFIX)
-    assert search.track_passing(result, cstore) == []                 # already tracked
+    assert search.track_passing(result, cstore, rows) == []           # already tracked
+    other_exit = {"params": {**rule["params"], "tp": 0.2, "sl": 0.05}, "passed": True}
+    assert search.track_passing({"rules": [other_exit]}, cstore, rows) == []   # same signals: same idea
+    rebound = {"params": {"triggers": ["dump24"], "tp": 0.1}, "passed": True}       # = preset "Odbicie po zrzucie"
+    assert search.track_passing({"rules": [rebound]}, cstore, [row(3, triggers=("dump24",), ch24=-0.3)]) == []
     store = search.SearchStore(tmp_path / "c.db")
     store.save({"rules": []})
     assert store.latest() == {"rules": []}
@@ -100,3 +105,27 @@ def test_rule_whose_stop_gets_gapped_through_never_passes():
     res = search.run(rows, paths, T0 + timedelta(days=60))
     assert res["rules"] and not any(r["passed"] for r in res["rules"])
     assert all(not r["safe"] for r in res["rules"] if r["test"]["n"])
+
+
+def test_duplicate_autos_are_removed_and_the_oldest_kept(tmp_path):
+    cstore = crypto.CryptoStore(tmp_path / "c.db")
+    journal = strategy.Journal(tmp_path / "c.db")
+    rows = [row(i, triggers=("move1h",), ch24=0.0, mcap=50e6 + i) for i in range(10)] + \
+           [row(20 + i, triggers=("volume",), ch24=0.0) for i in range(10)]
+    first = {"triggers": ["move1h"], "tp": 0.1}
+    copy = {"triggers": ["move1h"], "max_mcap": 1e9, "tp": 0.2, "sl": 0.03}     # an extra filter that filters nothing
+    short = {"triggers": ["move1h"], "side": "short"}                           # other side: a different idea
+    for p in (first, copy, short):
+        cstore.save_strategy(search.auto_name(p), p)
+    copy_key = f"c{cstore.strategies()[1]['id']}"
+    journal.record(copy_key, copy, [], lambda t: True)
+    removed = search.drop_duplicate_autos(cstore, journal, rows)
+    assert len(removed) == 1 and [s["params"] for s in cstore.strategies()] == [first, short]
+    assert journal.rows(copy_key, strategy.version(copy)) == []
+
+
+def test_a_broader_rule_containing_a_narrow_one_is_a_new_idea():
+    rows = [row(i, triggers=("move1h",), mcap=50e6 + i * 1e6) for i in range(20)]
+    narrow = {"triggers": ["move1h"], "max_mcap": 54e6}          # 5 of the 20 signals
+    assert not search.same_idea(narrow, {"triggers": ["move1h"]}, rows)
+    assert search.same_idea({"triggers": ["move1h"]}, {"triggers": ["move1h"], "max_mcap": 1e9, "tp": 0.3}, rows)

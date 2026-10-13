@@ -348,9 +348,11 @@ def run_search(cstore) -> None:
         paths = candles.CandleStore(webapp.DB_PATH).paths([r["id"] for r in rows])
         result = search.run(rows, paths, crypto.utcnow())
         search.SearchStore(webapp.DB_PATH).save(result)
-        added = search.track_passing(result, cstore)
+        removed = search.drop_duplicate_autos(cstore, strategy.Journal(webapp.DB_PATH), rows)
+        added = search.track_passing(result, cstore, rows)
         log(f"  strategie: {result['tried']} kombinacji na {result['signals']} sygnałach, "
-            f"przeszło test {result['passed']} z {result['train_positive']}, nowe śledzone: {added or 'brak'}")
+            f"przeszło test {result['passed']} z {result['train_positive']}, nowe śledzone: {added or 'brak'}, "
+            f"usunięte kopie: {removed or 'brak'}")
     except Exception as exc:  # never break the scan
         log(f"  szukanie strategii: błąd {safety.safe_error(exc)}")
 

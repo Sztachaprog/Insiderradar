@@ -42,6 +42,7 @@ MIN_TEST = 15         # trades on the test part before a rule can pass
 TOP = 25              # rules kept in the results (best per entry filter, ranked on train)
 AUTO_MAX = 6          # passing rules tracked live at most at once ("Auto: ..." strategies)
 AUTO_PER_RUN = 2      # new ones per search, so similar rules from one lucky stretch don't fill every slot
+SAME_IDEA = 0.8       # same side and >= 80% of their signals in common (of both together): one idea, TP/SL aside
 AUTO_PREFIX = "Auto: "
 # Small caps can gap straight through a stop. A rule whose worst trade would wipe out most of the margin
 # at our leverage (-25% at 3x = -75% of margin, close to liquidation) never passes, however good on average.
@@ -198,20 +199,47 @@ def auto_name(params: dict) -> str:
     return AUTO_PREFIX + ", ".join(parts)
 
 
-def track_passing(result: dict, cstore: crypto.CryptoStore) -> list[str]:
+def same_idea(a: dict, b: dict, rows: list[dict]) -> bool:
+    """Same side and (nearly) the same signals: a different take-profit or stop is not a new idea."""
+    if {**strategy.DEFAULTS, **a}["side"] != {**strategy.DEFAULTS, **b}["side"]:
+        return False
+    sa = {r["id"] for r in rows if strategy.matches(r, a)}
+    sb = {r["id"] for r in rows if strategy.matches(r, b)}
+    if not sa or not sb:
+        return strategy.version(a) == strategy.version(b)
+    return len(sa & sb) / len(sa | sb) >= SAME_IDEA     # a broad rule merely containing a narrow one is new
+
+
+def drop_duplicate_autos(cstore: crypto.CryptoStore, journal: strategy.Journal, rows: list[dict]) -> list[str]:
+    """Remove auto strategies that repeat an older one (or a preset); the oldest keeps its live record."""
+    kept = [p for k, _, _, p in strategy.PRESETS if k not in strategy.REFERENCE_ONLY]
+    removed = []
+    for s in cstore.strategies():                      # oldest first
+        if not s["name"].startswith(AUTO_PREFIX):
+            kept.append(s["params"])
+        elif any(same_idea(s["params"], k, rows) for k in kept):
+            cstore.delete_strategy(s["id"])
+            journal.delete(f"c{s['id']}")
+            removed.append(s["name"])
+        else:
+            kept.append(s["params"])
+    return removed
+
+
+def track_passing(result: dict, cstore: crypto.CryptoStore, rows: list[dict]) -> list[str]:
     """Save the best passing rules as strategies, so the scans journal them live from now on
-    (the only test no search can fool). Never more than AUTO_MAX auto strategies at once."""
-    have = {strategy.version(s["params"]) for s in cstore.strategies()} | \
-           {strategy.version(p) for _, _, _, p in strategy.PRESETS}
+    (the only test no search can fool). One strategy per idea, never more than AUTO_MAX at once."""
+    tracked = [p for k, _, _, p in strategy.PRESETS if k not in strategy.REFERENCE_ONLY] + \
+              [s["params"] for s in cstore.strategies()]
     room = min(AUTO_PER_RUN, AUTO_MAX - sum(s["name"].startswith(AUTO_PREFIX) for s in cstore.strategies()))
     added = []
     for r in result["rules"]:
         if room <= 0:
             break
-        if r["passed"] and strategy.version(r["params"]) not in have:
+        if r["passed"] and not any(same_idea(r["params"], p, rows) for p in tracked):
             name = auto_name(r["params"])
             cstore.save_strategy(name, r["params"])
-            have.add(strategy.version(r["params"]))
+            tracked.append(r["params"])
             added.append(name)
             room -= 1
     return added
