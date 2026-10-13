@@ -27,6 +27,12 @@ TPS = (0.05, 0.08, 0.10, 0.15, 0.20)
 SLS = (0.03, 0.05, 0.07, 0.10, 0.15, 0.20)   # up to strategy.MAX_SL: wider loses to liquidation at 3x
 HOLDS = (4, 12, 24, 48)
 EXITS = list(itertools.product(SIDES, TPS, SLS, HOLDS))
+# When to enter: at detection, or once the move turns 4% (see strategy.find_entry). Limit orders on a pullback
+# and a 2% turn were tried too: inconsistent between history and live, and every extra option lets the search
+# fit the past by chance more often (passing rules fell from 36% to 20%).
+ENTRY_VARIANTS = (("now", 0.0), ("confirm", 0.04))
+ENTRY_WAIT_H = 6
+COMBOS = [(v, k) for v in range(len(ENTRY_VARIANTS)) for k in range(len(EXITS))]
 
 FILTERS = {
     "triggers": [[], ["pump24"], ["dump24"], ["volume"], ["move1h"], ["trending"]],
@@ -128,44 +134,68 @@ def _stats(nets: list[float], sl: float) -> dict:
             "per_risk": lcb / sl, "worst": min(nets)}
 
 
+def entry_params(v: int) -> dict:
+    mode, pct = ENTRY_VARIANTS[v]
+    return {} if mode == "now" else {"entry": mode, "entry_pct": pct, "entry_wait_h": ENTRY_WAIT_H}
+
+
+def entry_path(row: dict, bars: list[tuple], side: str, v: int, now) -> Path | None:
+    """The signal's path as seen from the entry of variant v (None: the order was never filled)."""
+    e = strategy.find_entry(row, bars, {"side": side, **entry_params(v)}, now)
+    if isinstance(e, str):
+        return None
+    if e[0] == row["detected_at"]:
+        return Path(row, bars)
+    return Path({**row, "detected_at": e[0], "base_price": e[1]}, bars)
+
+
 def run(rows: list[dict], paths: dict[int, list], now, fee: float = strategy.FEE) -> dict:
-    """rows: crypto view rows (live + history); paths: signal id -> candles."""
-    sigs = sorted((Path(r, paths[r["id"]]) for r in rows if paths.get(r["id"])), key=lambda p: p.t0)
-    # Net result of every exit rule for every signal (None = open / no data).
-    table = [[p.outcome(side, tp, sl, h, now, fee) for side, tp, sl, h in EXITS] for p in sigs]
+    """rows: crypto view rows (live + history); paths: signal id -> candles. Only Binance tokens."""
+    rows = sorted((r for r in rows if paths.get(r["id"]) and r.get("venue") == "binance"),
+                  key=lambda r: r["detected_at"])
+    # Net result of every entry x exit combination for every signal (None = no fill / open / no data).
+    table = []
+    for r in rows:
+        views = {(side, v): entry_path(r, paths[r["id"]], side, v, now)
+                 for side in SIDES for v in range(len(ENTRY_VARIANTS))}
+        table.append([(view.outcome(*EXITS[k], now, fee) if (view := views[(EXITS[k][0], v)]) else None)
+                      for v, k in COMBOS])
     done = [i for i, outs in enumerate(table) if any(o is not None for o in outs)]
-    cut = sigs[done[int(len(done) * TRAIN_SHARE)]].t0 if done else ""
-    train_ids = [i for i in done if sigs[i].t0 < cut]
-    test_ids = [i for i in done if sigs[i].t0 >= cut]
+    cut = rows[done[int(len(done) * TRAIN_SHARE)]]["detected_at"] if done else ""
+    train_ids = [i for i in done if rows[i]["detected_at"] < cut]
+    test_ids = [i for i in done if rows[i]["detected_at"] >= cut]
 
     best_per_filter, seen = [], set()
     for fp in sorted(filter_params(), key=len):       # simplest filters first: they win ties
-        tr = [i for i in train_ids if strategy.matches(sigs[i].row, fp)]
+        tr = [i for i in train_ids if strategy.matches(rows[i], fp)]
         if len(tr) < MIN_TRAIN:
             continue
-        te = [i for i in test_ids if strategy.matches(sigs[i].row, fp)]
+        te = [i for i in test_ids if strategy.matches(rows[i], fp)]
         if (key := (tuple(tr), tuple(te))) in seen:
             continue                                   # an extra condition that filtered nothing out
         seen.add(key)
         best = None
-        for k, (side, tp, sl, h) in enumerate(EXITS):
-            s_tr = _stats([table[i][k] for i in tr if table[i][k] is not None], EXITS[k][2])
-            if s_tr["n"] < MIN_TRAIN:
+        for c, (v, k) in enumerate(COMBOS):
+            nets = [x for i in tr if (x := table[i][c]) is not None]
+            if len(nets) < MIN_TRAIN:
                 continue
+            s_tr = _stats(nets, EXITS[k][2])
             if best is None or s_tr["per_risk"] > best[0]["per_risk"]:
-                best = (s_tr, k)
+                best = (s_tr, c)
         if best:
-            s_tr, k = best
+            s_tr, c = best
+            v, k = COMBOS[c]
             side, tp, sl, h = EXITS[k]
-            s_te = _stats([table[i][k] for i in te if table[i][k] is not None], sl)
-            params = {**fp, "tp": tp, "sl": sl, "hold_h": h, **({"side": "short"} if side == "short" else {})}
+            s_te = _stats([x for i in te if (x := table[i][c]) is not None], sl)
+            params = {**fp, **entry_params(v), "tp": tp, "sl": sl, "hold_h": h,
+                      **({"side": "short"} if side == "short" else {})}
             safe = s_tr["worst"] > SAFE_WORST and (not s_te["n"] or s_te["worst"] > SAFE_WORST)
             best_per_filter.append({"params": params, "train": s_tr, "test": s_te, "safe": safe,
                                     "passed": bool(s_tr["avg"] > 0 and s_te["n"] >= MIN_TEST and s_te["avg"] > 0
                                                    and safe)})
     best_per_filter.sort(key=lambda r: -r["train"]["per_risk"])
     return {"ran_at": crypto.iso(now), "signals": len(done), "train": len(train_ids), "test": len(test_ids),
-            "split_at": cut, "tried": len(filter_params()) * len(EXITS), "rules": best_per_filter[:TOP],
+            "split_at": cut, "tried": len(filter_params()) * len(COMBOS), "rules": best_per_filter[:TOP],
             "train_positive": sum(r["train"]["avg"] > 0 for r in best_per_filter),
             "passed": sum(r["passed"] for r in best_per_filter)}
 
@@ -196,6 +226,8 @@ def auto_name(params: dict) -> str:
     if p["min_mcap"] or p["max_mcap"]:
         parts.append(f"{p['min_mcap'] / 1e6:g}–{p['max_mcap'] / 1e6:g} mln $" if p["max_mcap"]
                      else f"≥ {p['min_mcap'] / 1e6:g} mln $")
+    if p["entry"] != "now":
+        parts.append(f"wejście {strategy.ENTRIES[p['entry']]}")
     return AUTO_PREFIX + ", ".join(parts)
 
 

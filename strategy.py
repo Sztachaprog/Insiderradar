@@ -34,10 +34,16 @@ DEFAULTS = {
     "be": True,              # ladder: after TP1 the stop moves to the entry
     "trail": True,           # ladder: after TP2 the stop moves to TP1 (after TP3 to TP2, ...)
     "cex_only": False,       # only tokens trading on Binance: leverage exists only there, and so do clean candles
+    "entry": "now",          # "now": at the detection price; "pullback": a limit order entry_pct better (long below,
+                             # short above); "confirm": once the price turns by entry_pct from its extreme since
+                             # detection (short: down from the high, long: up from the low)
+    "entry_pct": 0.03,
+    "entry_wait_h": 6,       # no fill within this many hours: no trade
 }
 # Parameters added after trades were journaled: left out of the version while at their default,
 # so adding one never re-versions (and empties) the journals of existing strategies.
-ADDED_LATER = ("side", "tps", "parts", "be", "trail", "cex_only")
+ADDED_LATER = ("side", "tps", "parts", "be", "trail", "cex_only", "entry", "entry_pct", "entry_wait_h")
+ENTRIES = {"now": "od razu", "pullback": "na cofnięciu", "confirm": "po potwierdzeniu"}
 REFERENCE_ONLY = {"all"}   # baseline "buy every signal": compared against, not listed as positions
 FEE = 0.005      # round trip: ~0.1% exchange fee per side + slippage on small caps
 LEVERAGE = 3     # the most the user trades with: results are also shown per $ of margin at this leverage
@@ -87,7 +93,26 @@ def with_profit_taking(key: str, name: str, desc: str, params: dict) -> tuple:
             {**params, "tps": [round(sl, 4), round(2 * sl, 4), round(3 * sl, 4)], "parts": PROFIT_TAKING_PARTS})
 
 
-PRESETS += [with_profit_taking(*p) for p in list(PRESETS) if p[0] not in REFERENCE_ONLY | {"chase"}]
+CONFIRM_SUFFIX = "_conf"
+CONFIRM_ENTRY = {"entry": "confirm", "entry_pct": 0.04, "entry_wait_h": 6}
+CONFIRMED = ("accumulation", "high_score", "micro")   # longs whose results improved this way, on history and live
+
+
+def with_confirmed_entry(key: str, name: str, desc: str, params: dict) -> tuple:
+    """The same signals, but buy only once the price has bounced 4% from its low since detection."""
+    return (key + CONFIRM_SUFFIX, name + " + wejście po potwierdzeniu",
+            "Te same sygnały co strategia bez dopisku, ale kupno dopiero, gdy cena odbije 4% od dołka po wykryciu "
+            "(czekamy do 6 h, bez odbicia nie ma transakcji). TP i SL liczone od faktycznej ceny wejścia.",
+            {**params, **CONFIRM_ENTRY})
+
+
+def is_twin(key: str) -> bool:
+    """A preset variant on the same signals as its original (no own alerts, off by default in the portfolio)."""
+    return key.endswith(TWIN_SUFFIX) or key.endswith(CONFIRM_SUFFIX)
+
+
+PRESETS += [with_profit_taking(*p) for p in list(PRESETS) if p[0] not in REFERENCE_ONLY | {"chase"}] + \
+           [with_confirmed_entry(*p) for p in list(PRESETS) if p[0] in CONFIRMED]
 
 FORM_FIELDS = {  # name: (cast, scale applied to the form value)
     "min_score": (int, 1), "max_score": (int, 1),
@@ -141,6 +166,8 @@ def form_values(params: dict) -> dict:
 def describe(params: dict) -> list[str]:
     p = {**DEFAULTS, **params}
     parts = (["SHORT"] if p["side"] == "short" else []) + (["tylko Binance"] if p["cex_only"] else [])
+    if p["entry"] != "now":
+        parts.append(f"wejście {ENTRIES[p['entry']]} {p['entry_pct']:.0%} (do {p['entry_wait_h']} h)")
     if p["triggers"]:
         parts.append("ruch: " + " lub ".join(crypto.TRIGGER_LABELS[t] for t in p["triggers"]))
     if p["exclude"]:
@@ -210,8 +237,50 @@ def _bars(points: list[tuple]):
         yield (p[0], p[1], p[1], p[1], p[1], False) if len(p) == 2 else (*p[:5], True)
 
 
+def find_entry(row: dict, points: list[tuple], params: dict, now) -> tuple[str, float] | str:
+    """(time, price) of the entry, or "waiting" / "no_entry" while / after no order was filled.
+    The bar that fills an order only enters; exits are checked from the next bar on."""
+    p = {**DEFAULTS, **params}
+    if p["entry"] == "now":
+        return row["detected_at"], row["base_price"]
+    short = p["side"] == "short"
+    base, x = row["base_price"], p["entry_pct"]
+    expiry = crypto.iso(crypto.parse_iso(row["detected_at"]) + timedelta(hours=p["entry_wait_h"]))
+    extreme = base                       # "confirm": the high (short) / low (long) since detection
+    for ts, o, h, low, c, is_candle in _bars(points):
+        if ts <= row["detected_at"]:
+            continue
+        if ts > expiry:
+            return "no_entry"
+        if p["entry"] == "pullback":     # limit order: long below, short above the detection price
+            level = base * (1 + x) if short else base * (1 - x)
+            if (h >= level) if short else (low <= level):
+                return ts, (max(o, level) if short else min(o, level)) if is_candle else (h if short else low)
+        else:                            # stop order once the price turns from its extreme by x
+            level = extreme * (1 - x) if short else extreme * (1 + x)
+            if (low <= level) if short else (h >= level):
+                return ts, (min(o, level) if short else max(o, level)) if is_candle else (low if short else h)
+            extreme = max(extreme, h) if short else min(extreme, low)
+    return "no_entry" if crypto.iso(now) > expiry else "waiting"
+
+
 def simulate(row: dict, points: list[tuple], params: dict, now, fee: float = FEE) -> dict:
-    """Enter at the price recorded at detection, then walk the price path.
+    """Enter (see find_entry), then manage the position until it is closed; see _run."""
+    entry = find_entry(row, points, params, now)
+    if isinstance(entry, str):
+        p = {**DEFAULTS, **params}
+        return {"row": row, "entry": None, "entry_at": None, "exit": None, "exit_at": None, "reason": None,
+                "gross": None, "net": None, "status": entry, "peak": 0.0, "trough": 0.0, "tp_hits": 0,
+                "source": "candles" if points and len(points[0]) > 2 else "snapshots", "side": p["side"]}
+    if entry[0] == row["detected_at"]:
+        return _run(row, points, params, now, fee)
+    trade = _run({**row, "detected_at": entry[0], "base_price": entry[1]}, points, params, now, fee)
+    trade["row"] = row
+    return trade
+
+
+def _run(row: dict, points: list[tuple], params: dict, now, fee: float = FEE) -> dict:
+    """Enter at row's base price and time, then walk the price path.
 
     Exits: a ladder of take-profits (tps) closes part of the position at each level (parts); after TP1
     the stop moves to the entry (be), after TP2 to TP1 (trail), and so on. A single tp is a ladder of
@@ -311,6 +380,7 @@ def backtest(rows: list[dict], prices: dict, params: dict, now, fee: float = FEE
 
 
 def summarize(trades: list[dict], stake: float = STAKE) -> dict:
+    trades = [t for t in trades if t["status"] in ("open", "closed", "no_data")]   # orders never filled: no trade
     closed = sorted([t for t in trades if t["status"] == "closed"], key=lambda t: t["exit_at"])
     open_ = [t for t in trades if t["status"] == "open"]
     nets = [t["net"] for t in closed]
@@ -383,7 +453,8 @@ class Journal:
         now = crypto.iso(crypto.utcnow())
         rows = [(strategy, ver, t["row"]["id"], t["entry_at"], t["entry"], t["exit_at"], t["exit"], t["reason"],
                  t["gross"], t["net"], t["peak"], t["trough"], t["status"], t["source"], int(is_final(t)), now)
-                for t in trades if t["row"]["id"] not in frozen]
+                for t in trades if t["row"]["id"] not in frozen
+                and t["status"] not in ("waiting", "no_entry")]    # an order never filled is not a trade
         with sqlite3.connect(self.path) as c:
             c.executemany(f"INSERT OR REPLACE INTO sim_trades VALUES ({', '.join('?' * len(self.COLUMNS))})", rows)
         return len(rows)

@@ -920,7 +920,7 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         # Default: every strategy except the deliberate loser kept as a control, and without the
         # profit-taking twins (the same entries as their originals).
         defaults = {**portfolio.DEFAULTS, "strategies": [s["key"] for s in strategies if s["key"] != "chase"
-                                                         and not s["key"].endswith(strategy.TWIN_SUFFIX)]}
+                                                         and not strategy.is_twin(s["key"])]}
         return render_template("portfolio.html", trades=trades, defaults=defaults, strategies=strategies,
                                now=crypto.iso(now), max_lev=strategy.LEVERAGE, **common(page="portfolio"))
 

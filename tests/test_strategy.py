@@ -176,3 +176,33 @@ def test_binance_only_rule():
     assert strategy.matches(row(), {})                                      # the rule is off by default
     assert all(p["cex_only"] for k, _, _, p in strategy.PRESETS)
     assert strategy.params_from_form(MultiDict({"cex_only": "1"}))["cex_only"] is True
+
+
+def test_pullback_entry_fills_the_limit_and_measures_from_there():
+    p = {"entry": "pullback", "entry_pct": 0.04, "tp": 0.10, "sl": 0.05}
+    t = strategy.simulate(row(), candles((1, 1.0, 1.01, 0.95, 0.96), (2, 0.96, 1.07, 0.95, 1.06)), p, LATER, fee=0)
+    assert t["entry"] == pytest.approx(0.96) and t["entry_at"] == crypto.iso(T0 + timedelta(minutes=1))
+    assert t["reason"] == "take-profit" and t["gross"] == pytest.approx(0.10)        # +10% from 0.96, not from 1.0
+
+
+def test_unfilled_order_is_no_trade():
+    p = {"entry": "pullback", "entry_pct": 0.04, "entry_wait_h": 1}
+    path = candles((1, 1.0, 1.02, 0.99, 1.01), (90, 1.01, 1.03, 0.90, 0.95))         # the dip comes too late
+    assert strategy.simulate(row(), path, p, LATER)["status"] == "no_entry"
+    assert strategy.simulate(row(), path[:1], p, T0 + timedelta(minutes=30))["status"] == "waiting"
+    assert strategy.summarize([strategy.simulate(row(), path, p, LATER)])["matched"] == 0
+
+
+def test_confirmed_short_enters_once_the_pump_turns():
+    p = {"entry": "confirm", "entry_pct": 0.03, "side": "short", "tp": 0.10, "sl": 0.05}
+    path = candles((1, 1.0, 1.20, 1.0, 1.19), (2, 1.19, 1.19, 1.15, 1.16), (3, 1.16, 1.16, 1.0, 1.02))
+    t = strategy.simulate(row(), path, p, LATER, fee=0)                                 # high 1.20, turn at 1.164
+    assert t["entry"] == pytest.approx(1.20 * 0.97) and t["entry_at"] == crypto.iso(T0 + timedelta(minutes=2))
+    assert t["reason"] == "take-profit"
+
+
+def test_confirmed_entry_twins():
+    keys = {k for k, _, _, _ in strategy.PRESETS}
+    assert {"accumulation_conf", "high_score_conf", "micro_conf"} <= keys and "fade_pump_conf" not in keys
+    p = next(p for k, _, _, p in strategy.PRESETS if k == "micro_conf")
+    assert p["entry"] == "confirm" and p["cex_only"] and strategy.is_twin("micro_conf") and not strategy.is_twin("micro")

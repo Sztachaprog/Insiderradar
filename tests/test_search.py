@@ -130,3 +130,25 @@ def test_a_broader_rule_containing_a_narrow_one_is_a_new_idea():
     narrow = {"triggers": ["move1h"], "max_mcap": 54e6}          # 5 of the 20 signals
     assert not search.same_idea(narrow, {"triggers": ["move1h"]}, rows)
     assert search.same_idea({"triggers": ["move1h"]}, {"triggers": ["move1h"], "max_mcap": 1e9, "tp": 0.3}, rows)
+
+
+@pytest.mark.parametrize("seed", range(8))
+def test_fast_outcomes_with_entry_variants_equal_the_simulation(seed):
+    r = row()
+    bars = random_walk(100 + seed, step=1 if seed % 2 else 3)
+    now = T0 + timedelta(days=5)
+    for side in search.SIDES:
+        for v in range(len(search.ENTRY_VARIANTS)):
+            view = search.entry_path(r, bars, side, v, now)
+            for _, tp, sl, h in [e for e in search.EXITS if e[0] == side][::7]:
+                params = {"side": side, "tp": tp, "sl": sl, "hold_h": h, **search.entry_params(v)}
+                t = strategy.simulate(r, bars, params, now, fee=0.005)
+                fast = view.outcome(side, tp, sl, h, now, 0.005) if view else None
+                if t["status"] == "closed":
+                    assert fast == pytest.approx(t["net"]), (side, v, tp, sl, h)
+                else:
+                    assert fast is None, (side, v, tp, sl, h, t["status"])
+
+
+def test_auto_name_tells_the_entry():
+    assert search.auto_name({"entry": "confirm"}) == "Auto: long, każdy ruch, wejście po potwierdzeniu"
