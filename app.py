@@ -871,7 +871,8 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
         for t in open_:
             ts, px = now_px.get(t["event_id"], (None, events[t["event_id"]].get("price_now")))
             t["now_price"], t["now_ts"] = px, ts
-            t["now_ret"] = strategy.gross_return(t, px) if px else None
+            # A ladder has banked part of the profit already: the journal's mark-to-market includes it.
+            t["now_ret"] = t["gross"] if t["full"].get("tps") else (strategy.gross_return(t, px) if px else None)
         tabs, active = strategy_tabs("open")
         return render_template("positions.html", mode="open", positions=open_, tabs=tabs, active=active,
                                heading="Otwarte pozycje", **common(page="strategies"))
@@ -914,8 +915,10 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
             done = [t["ret"] for t in trades if t["b"] == "lev" and t["src"] == key and t["out"]]
             strategies.append({"key": key, "name": name, "side": {**strategy.DEFAULTS, **params}["side"],
                                "n": len(done), "avg": sum(done) / len(done) if done else None})
-        # Default: every strategy except the deliberate loser kept as a control.
-        defaults = {**portfolio.DEFAULTS, "strategies": [s["key"] for s in strategies if s["key"] != "chase"]}
+        # Default: every strategy except the deliberate loser kept as a control, and without the
+        # profit-taking twins (the same entries as their originals).
+        defaults = {**portfolio.DEFAULTS, "strategies": [s["key"] for s in strategies if s["key"] != "chase"
+                                                         and not s["key"].endswith(strategy.TWIN_SUFFIX)]}
         return render_template("portfolio.html", trades=trades, defaults=defaults, strategies=strategies,
                                now=crypto.iso(now), max_lev=strategy.LEVERAGE, **common(page="portfolio"))
 

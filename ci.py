@@ -399,7 +399,8 @@ def collect_alerts(parts, now=None) -> list[tuple[str, str]]:
              "xtb_crypto": store.xtb_catalog("crypto"), "news": cstore.news()}
     crows, _ = webapp.build_crypto_rows(cdata, {})
     fresh = [r for r in crows if crypto.parse_iso(r["detected_at"]) >= now - timedelta(hours=2)]
-    catalog = [(name, params) for key, name, _, params in strategy.PRESETS if key not in NO_ALERT_STRATEGIES]
+    catalog = [(name, params) for key, name, _, params in strategy.PRESETS
+               if key not in NO_ALERT_STRATEGIES and not key.endswith(strategy.TWIN_SUFFIX)]   # twins: same entries
     catalog += [(s["name"], s["params"]) for s in cstore.strategies()]
     hits: dict[int, list[str]] = {}
     for name, params in catalog:

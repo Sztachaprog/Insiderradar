@@ -119,7 +119,7 @@ def test_open_short_is_marked_to_market_and_levels_mirror():
 def test_adding_the_side_keeps_old_journal_versions():
     import hashlib
     import json
-    old_defaults = {k: v for k, v in strategy.DEFAULTS.items() if k != "side"}
+    old_defaults = {k: v for k, v in strategy.DEFAULTS.items() if k not in strategy.ADDED_LATER}
     params = {"triggers": ["volume"], "tp": 0.12}
     before = hashlib.sha1(json.dumps({**old_defaults, **params}, sort_keys=True).encode()).hexdigest()[:8]
     assert strategy.version(params) == before
@@ -133,3 +133,36 @@ def test_side_from_the_editor_form():
 
 def test_editor_caps_the_stop_below_liquidation():
     assert strategy.params_from_form(MultiDict({"sl": "35"}))["sl"] == strategy.MAX_SL
+
+
+
+LADDER = {"tps": [0.05, 0.10, 0.20], "parts": [0.2, 0.4, 0.4], "sl": 0.05}
+
+
+def test_ladder_takes_partial_profits_and_closes_the_rest_at_the_last_target():
+    t = strategy.simulate(row(), candles((1, 1.0, 1.06, 0.99, 1.05), (2, 1.05, 1.11, 1.04, 1.10),
+                                         (3, 1.10, 1.21, 1.09, 1.20)), LADDER, LATER, fee=0.005)
+    assert t["reason"] == "take-profit" and t["tp_hits"] == 3
+    assert t["gross"] == pytest.approx(0.2 * 0.05 + 0.4 * 0.10 + 0.4 * 0.20)
+    assert t["net"] == pytest.approx(t["gross"] - 0.005)
+
+
+def test_after_tp1_the_stop_is_at_the_entry_and_after_tp2_at_tp1():
+    be = strategy.simulate(row(), candles((1, 1.0, 1.06, 0.99, 1.05), (2, 1.05, 1.06, 0.99, 1.0)), LADDER, LATER, fee=0)
+    assert be["reason"] == "stop po TP1" and be["gross"] == pytest.approx(0.2 * 0.05)        # the rest at the entry
+    tr = strategy.simulate(row(), candles((1, 1.0, 1.11, 0.99, 1.10), (2, 1.10, 1.10, 1.04, 1.05)), LADDER, LATER, fee=0)
+    assert tr["reason"] == "stop po TP2" and tr["gross"] == pytest.approx(0.2 * 0.05 + 0.4 * 0.10 + 0.4 * 0.05)
+
+
+def test_ladder_without_moving_the_stop_and_for_a_short():
+    keep = strategy.simulate(row(), candles((1, 1.0, 1.06, 0.99, 1.05), (2, 1.05, 1.06, 0.94, 0.95)),
+                             {**LADDER, "be": False}, LATER, fee=0)
+    assert keep["reason"] == "stop po TP1" and keep["gross"] == pytest.approx(0.2 * 0.05 - 0.8 * 0.05)
+    short = strategy.simulate(row(), candles((1, 1.0, 1.01, 0.94, 0.95), (2, 0.95, 1.01, 0.94, 1.0)),
+                              {**LADDER, "side": "short"}, LATER, fee=0)
+    assert short["reason"] == "stop po TP1" and short["gross"] == pytest.approx(0.2 * 0.05)
+
+
+def test_open_ladder_trade_counts_what_was_already_banked():
+    t = strategy.simulate(row(), candles((1, 1.0, 1.06, 0.99, 1.04),), LADDER, T0 + timedelta(minutes=5), fee=0)
+    assert t["status"] == "open" and t["gross"] == pytest.approx(0.2 * 0.05 + 0.8 * 0.04)

@@ -29,10 +29,14 @@ DEFAULTS = {
     "min_vol": None, "max_vol": None,         # volume / market cap at detection
     "tp": 0.10, "sl": 0.05, "hold_h": 24,
     "side": "long",          # "short": profit when the price falls (TP below the entry, SL above)
+    "tps": None,             # take-profit ladder, e.g. [0.05, 0.10, 0.20]; None = the single tp
+    "parts": None,           # share closed at each level, e.g. [0.2, 0.4, 0.4]; None = equal parts
+    "be": True,              # ladder: after TP1 the stop moves to the entry
+    "trail": True,           # ladder: after TP2 the stop moves to TP1 (after TP3 to TP2, ...)
 }
 # Parameters added after trades were journaled: left out of the version while at their default,
 # so adding one never re-versions (and empties) the journals of existing strategies.
-ADDED_LATER = ("side",)
+ADDED_LATER = ("side", "tps", "parts", "be", "trail")
 REFERENCE_ONLY = {"all"}   # baseline "buy every signal": compared against, not listed as positions
 FEE = 0.005      # round trip: ~0.1% exchange fee per side + slippage on small caps
 LEVERAGE = 3     # the most the user trades with: results are also shown per $ of margin at this leverage
@@ -62,6 +66,23 @@ PRESETS = [
      "Kupowanie takich ruchów systematycznie traci, więc sprawdzamy, czy zarabia granie przeciwko nim.",
      {"triggers": ["pump24"], "side": "short", "tp": 0.10, "sl": 0.10}),
 ]
+
+# Every preset also runs with profit taking, on the same entries, so both exit plans meet the same signals.
+TWIN_SUFFIX = "_tp3"
+PROFIT_TAKING_PARTS = [0.2, 0.4, 0.4]
+
+
+def with_profit_taking(key: str, name: str, desc: str, params: dict) -> tuple:
+    """TP1 / TP2 / TP3 at 1x / 2x / 3x the stop, closing 20 / 40 / 40% of the position;
+    the stop moves to the entry after TP1 and to TP1 after TP2."""
+    sl = {**DEFAULTS, **params}["sl"]
+    return (key + TWIN_SUFFIX, name + " + branie zysków",
+            "Te same wejścia co strategia bez dopisku, ale zysk brany po kawałku: 20% na TP1 (1× stop), 40% na TP2 (2×), "
+            "reszta na TP3 (3×). Po TP1 stop idzie na wejście, po TP2 na TP1.",
+            {**params, "tps": [round(sl, 4), round(2 * sl, 4), round(3 * sl, 4)], "parts": PROFIT_TAKING_PARTS})
+
+
+PRESETS += [with_profit_taking(*p) for p in list(PRESETS) if p[0] not in REFERENCE_ONLY | {"chase"}]
 
 FORM_FIELDS = {  # name: (cast, scale applied to the form value)
     "min_score": (int, 1), "max_score": (int, 1),
@@ -128,16 +149,24 @@ def describe(params: dict) -> list[str]:
     if p["min_vol"] is not None or p["max_vol"] is not None:
         parts.append(f"wolumen {p['min_vol'] or 0:g}–{p['max_vol'] if p['max_vol'] is not None else '∞'}× kap.")
     up, down = ("−", "+") if p["side"] == "short" else ("+", "−")
-    parts.append(f"TP {up}{p['tp']:.0%} · SL {down}{p['sl']:.0%} · max {p['hold_h']} h")
+    if p["tps"]:
+        tps, shares = ladder(p)
+        moves = (["po TP1 SL na wejście"] if p["be"] else []) + (["po TP2 na TP1"] if p["trail"] and len(tps) > 2 else [])
+        parts.append("TP " + " / ".join(f"{up}{x:.0%}" for x in tps) + " (" + "/".join(f"{x * 100:.0f}" for x in shares)
+                     + "%)" + f" · SL {down}{p['sl']:.0%}" + (" (" + ", ".join(moves) + ")" if moves else "")
+                     + f" · max {p['hold_h']} h")
+    else:
+        parts.append(f"TP {up}{p['tp']:.0%} · SL {down}{p['sl']:.0%} · max {p['hold_h']} h")
     return parts
 
 
 def levels(entry: float, params: dict) -> tuple[float, float]:
     """(take-profit price, stop-loss price) for a position opened at entry."""
     p = {**DEFAULTS, **params}
+    tp = ladder(p)[0][-1]                       # with a ladder: the last target
     if p["side"] == "short":
-        return entry * (1 - p["tp"]), entry * (1 + p["sl"])
-    return entry * (1 + p["tp"]), entry * (1 - p["sl"])
+        return entry * (1 - tp), entry * (1 + p["sl"])
+    return entry * (1 + tp), entry * (1 - p["sl"])
 
 
 def matches(row: dict, params: dict) -> bool:
@@ -172,29 +201,43 @@ def _bars(points: list[tuple]):
 
 
 def simulate(row: dict, points: list[tuple], params: dict, now, fee: float = FEE) -> dict:
-    """Enter at the price recorded at detection, then walk the price path. Long: take-profit
-    if a bar's high reaches it, stop-loss if its low does; short: the mirror image. Both in one
-    bar -> stop-loss first (the cautious reading), otherwise exit when the hold time ends.
-    A bar that opens beyond a level (a gap) fills at its open, like a real order would.
+    """Enter at the price recorded at detection, then walk the price path.
+
+    Exits: a ladder of take-profits (tps) closes part of the position at each level (parts); after TP1
+    the stop moves to the entry (be), after TP2 to TP1 (trail), and so on. A single tp is a ladder of
+    one level closing everything. Long: a level is hit when a bar's high reaches it, the stop when its
+    low does; short: the mirror image. Within one bar the stop is checked first (the cautious reading);
+    a stop moved by a take-profit applies from the next bar. A bar that opens beyond a level (a gap)
+    fills at its open. Otherwise the rest is closed when the hold time ends.
     peak / trough are the price extremes during the trade, whichever the side."""
     p = {**DEFAULTS, **params}
     short = p["side"] == "short"
+    d = -1 if short else 1
     t0 = crypto.parse_iso(row["detected_at"])
     deadline = t0 + timedelta(hours=p["hold_h"])
     base = row["base_price"]
-    tp_level, sl_level = levels(base, p)
+    tps, parts = ladder(p)
+    targets = [base * (1 + d * x) for x in tps]
+    stop = base * (1 - d * p["sl"])
     trade = {"row": row, "entry": base, "entry_at": row["detected_at"], "exit": None, "exit_at": None,
              "reason": None, "gross": None, "net": None, "status": "open", "peak": 0.0, "trough": 0.0,
-             "source": "candles" if points and len(points[0]) > 2 else "snapshots", "side": p["side"]}
+             "source": "candles" if points and len(points[0]) > 2 else "snapshots", "side": p["side"],
+             "tp_hits": 0}
+    realized, left = 0.0, 1.0           # return already banked by partial exits, share still open
     last = None
 
+    def finish(price: float, ts: str, reason: str) -> dict:
+        gross = realized + left * d * (price / base - 1)
+        trade.update(exit=price, exit_at=ts, reason=reason, status="closed", gross=gross, net=gross - fee)
+        return trade
+
     def time_exit(after: tuple | None):
-        # Sell at the deadline: use the bar closest to it, if one is within 2 h.
+        # Sell the rest at the deadline: use the bar closest to it, if one is within 2 h.
         near = timedelta(hours=2)
         if last and crypto.parse_iso(last[0]) >= deadline - near:
-            return _close(trade, last[1], last[0], "czas", fee)
+            return finish(last[1], last[0], "czas")
         if after and crypto.parse_iso(after[0]) - deadline <= near:
-            return _close(trade, after[1], after[0], "czas", fee)
+            return finish(after[1], after[0], "czas")
         trade["status"] = "no_data"
         return trade
 
@@ -205,35 +248,47 @@ def simulate(row: dict, points: list[tuple], params: dict, now, fee: float = FEE
             return time_exit((ts, o))
         trade["peak"] = max(trade["peak"], h / base - 1)
         trade["trough"] = min(trade["trough"], low / base - 1)
-        if short:
-            if h >= sl_level:
-                return _close(trade, max(o, sl_level) if is_candle else h, ts, "stop-loss", fee)
-            if low <= tp_level:
-                return _close(trade, min(o, tp_level) if is_candle else tp_level, ts, "take-profit", fee)
-        else:
-            if low <= sl_level:
-                return _close(trade, min(o, sl_level) if is_candle else low, ts, "stop-loss", fee)
-            if h >= tp_level:
-                return _close(trade, max(o, tp_level) if is_candle else tp_level, ts, "take-profit", fee)
+        if (h >= stop) if short else (low <= stop):
+            fill = (max(o, stop) if short else min(o, stop)) if is_candle else (h if short else low)
+            hits = trade["tp_hits"]
+            return finish(fill, ts, f"stop po TP{hits}" if hits else "stop-loss")
+        while trade["tp_hits"] < len(targets):
+            k = trade["tp_hits"]
+            level = targets[k]
+            if not ((low <= level) if short else (h >= level)):
+                break
+            fill = (min(o, level) if short else max(o, level)) if is_candle else level
+            realized += parts[k] * d * (fill / base - 1)
+            left -= parts[k]
+            trade["tp_hits"] = k + 1
+            if k + 1 == len(targets):
+                left = 0.0
+                return finish(fill, ts, "take-profit")
+            if p["be"] and k == 0:
+                stop = base                                   # nothing to lose any more
+            if p["trail"] and k >= 1:
+                stop = targets[k - 1]                         # after TP2 the stop sits at TP1, and so on
         last = (ts, c)
     if now >= deadline:
         return time_exit(None)
     if last:  # still running: mark to market
-        trade["gross"] = gross_return(trade, last[1])
+        trade["gross"] = realized + left * d * (last[1] / base - 1)
         trade["net"] = trade["gross"] - fee
     return trade
+
+
+def ladder(params: dict) -> tuple[list[float], list[float]]:
+    """(take-profit levels, share of the position closed at each); one level closes everything."""
+    p = {**DEFAULTS, **params}
+    tps = list(p["tps"] or [p["tp"]])
+    parts = list(p["parts"] or [1 / len(tps)] * len(tps))
+    return tps, parts
 
 
 def gross_return(trade: dict, price: float) -> float:
     """Return of the position at this price before fees (a short gains when the price falls)."""
     move = price / trade["entry"] - 1
     return -move if trade.get("side") == "short" else move
-
-
-def _close(trade: dict, price: float, ts: str, reason: str, fee: float) -> dict:
-    trade.update(exit=price, exit_at=ts, reason=reason, status="closed", gross=gross_return(trade, price))
-    trade["net"] = trade["gross"] - fee
-    return trade
 
 
 def backtest(rows: list[dict], prices: dict, params: dict, now, fee: float = FEE, stake: float = STAKE,
