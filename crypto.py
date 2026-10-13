@@ -234,6 +234,10 @@ class CryptoStore:
             c.execute("INSERT INTO crypto_strategies (name, params, created_at) VALUES (?, ?, ?)",
                       (name, json.dumps(params), iso(utcnow())))
 
+    def update_strategy(self, strategy_id: int, params: dict) -> None:
+        with self._conn() as c:
+            c.execute("UPDATE crypto_strategies SET params = ? WHERE id = ?", (json.dumps(params), strategy_id))
+
     def delete_strategy(self, strategy_id: int) -> None:
         with self._conn() as c:
             c.execute("DELETE FROM crypto_strategies WHERE id = ?", (strategy_id,))

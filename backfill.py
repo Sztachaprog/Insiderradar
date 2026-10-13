@@ -157,7 +157,7 @@ def record_journal(db_path, now: datetime | None = None, only_missing: bool = Fa
     now = now or crypto.utcnow()
     cstore, store = crypto.CryptoStore(db_path), candles.CandleStore(db_path)
     cdata = {"events": cstore.events(), "prices": {}, "coins": cstore.coins(), "weights": cstore.weights(),
-             "xtb_crypto": set(), "news": {}}
+             "xtb_crypto": set(), "news": {}, "venues": store.sources()}
     rows, _ = webapp.build_crypto_rows(cdata, {"history": "1"})
     rows = [r for r in rows if r.get("origin") == "backfill"]
     journal = strategy.Journal(db_path)

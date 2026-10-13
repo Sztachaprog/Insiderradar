@@ -315,7 +315,7 @@ def candles_and_journal(store, cstore, status: Status, now=None) -> None:
     status.last_run = datetime.now().strftime("%H:%M:%S")
 
     cdata = {"events": cstore.events(), "prices": cstore.prices(), "coins": cstore.coins(),
-             "weights": cstore.weights(), "xtb_crypto": set(), "news": cstore.news()}
+             "weights": cstore.weights(), "xtb_crypto": set(), "news": cstore.news(), "venues": kstore.sources()}
     rows, _ = webapp.build_crypto_rows(cdata, {})
     recent = [r for r in rows if crypto.parse_iso(r["detected_at"]) >= now - timedelta(days=JOURNAL_DAYS)]
     paths = kstore.paths([r["id"] for r in recent])
@@ -343,11 +343,12 @@ def run_search(cstore) -> None:
     are saved as "Auto: ..." strategies, so the scans track them live from now on."""
     try:
         cdata = {"events": cstore.events(), "prices": {}, "coins": cstore.coins(), "weights": cstore.weights(),
-                 "xtb_crypto": set(), "news": {}}
+                 "xtb_crypto": set(), "news": {}, "venues": candles.CandleStore(webapp.DB_PATH).sources()}
         rows, _ = webapp.build_crypto_rows(cdata, {"history": "1"})
         paths = candles.CandleStore(webapp.DB_PATH).paths([r["id"] for r in rows])
         result = search.run(rows, paths, crypto.utcnow())
         search.SearchStore(webapp.DB_PATH).save(result)
+        search.upgrade_autos(cstore)
         removed = search.drop_duplicate_autos(cstore, strategy.Journal(webapp.DB_PATH), rows)
         added = search.track_passing(result, cstore, rows)
         log(f"  strategie: {result['tried']} kombinacji na {result['signals']} sygnałach, "
@@ -396,7 +397,8 @@ def collect_alerts(parts, now=None) -> list[tuple[str, str]]:
 
     # Crypto moves from the last 2 hours: strong score, or an entry for a saved/preset strategy.
     cdata = {"events": cstore.events(), "prices": cstore.prices(), "coins": cstore.coins(), "weights": cstore.weights(),
-             "xtb_crypto": store.xtb_catalog("crypto"), "news": cstore.news()}
+             "xtb_crypto": store.xtb_catalog("crypto"), "news": cstore.news(),
+             "venues": candles.CandleStore(webapp.DB_PATH).sources()}
     crows, _ = webapp.build_crypto_rows(cdata, {})
     fresh = [r for r in crows if crypto.parse_iso(r["detected_at"]) >= now - timedelta(hours=2)]
     catalog = [(name, params) for key, name, _, params in strategy.PRESETS

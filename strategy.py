@@ -33,10 +33,11 @@ DEFAULTS = {
     "parts": None,           # share closed at each level, e.g. [0.2, 0.4, 0.4]; None = equal parts
     "be": True,              # ladder: after TP1 the stop moves to the entry
     "trail": True,           # ladder: after TP2 the stop moves to TP1 (after TP3 to TP2, ...)
+    "cex_only": False,       # only tokens trading on Binance: leverage exists only there, and so do clean candles
 }
 # Parameters added after trades were journaled: left out of the version while at their default,
 # so adding one never re-versions (and empties) the journals of existing strategies.
-ADDED_LATER = ("side", "tps", "parts", "be", "trail")
+ADDED_LATER = ("side", "tps", "parts", "be", "trail", "cex_only")
 REFERENCE_ONLY = {"all"}   # baseline "buy every signal": compared against, not listed as positions
 FEE = 0.005      # round trip: ~0.1% exchange fee per side + slippage on small caps
 LEVERAGE = 3     # the most the user trades with: results are also shown per $ of margin at this leverage
@@ -66,6 +67,10 @@ PRESETS = [
      "Kupowanie takich ruchów systematycznie traci, więc sprawdzamy, czy zarabia granie przeciwko nim.",
      {"triggers": ["pump24"], "side": "short", "tp": 0.10, "sl": 0.10}),
 ]
+
+# Leveraged strategies trade only Binance tokens: DEX-only tokens can't be traded with leverage, and their
+# data (sparse or mismatched pools, rug pulls between scans) made up the worst "trades".
+PRESETS = [(k, n, d, {**p, "cex_only": True}) for k, n, d, p in PRESETS]
 
 # Every preset also runs with profit taking, on the same entries, so both exit plans meet the same signals.
 TWIN_SUFFIX = "_tp3"
@@ -111,6 +116,8 @@ def params_from_form(form) -> dict:
             p[name] = [v for v in vals if v in crypto.TRIGGER_LABELS]
     if form.get("side") == "short":
         p["side"] = "short"
+    if form.get("cex_only"):
+        p["cex_only"] = True
     if "sl" in p:
         p["sl"] = min(p["sl"], MAX_SL)   # a wider stop would be beaten by liquidation at our leverage
     return p
@@ -127,12 +134,13 @@ def form_values(params: dict) -> dict:
         else:
             out[name] = f"{v / scale:g}" if cast is float else str(v)
     out["triggers"], out["exclude"], out["side"] = p["triggers"], p["exclude"], p["side"]
+    out["cex_only"] = p["cex_only"]
     return out
 
 
 def describe(params: dict) -> list[str]:
     p = {**DEFAULTS, **params}
-    parts = ["SHORT"] if p["side"] == "short" else []
+    parts = (["SHORT"] if p["side"] == "short" else []) + (["tylko Binance"] if p["cex_only"] else [])
     if p["triggers"]:
         parts.append("ruch: " + " lub ".join(crypto.TRIGGER_LABELS[t] for t in p["triggers"]))
     if p["exclude"]:
@@ -172,6 +180,8 @@ def levels(entry: float, params: dict) -> tuple[float, float]:
 def matches(row: dict, params: dict) -> bool:
     """row: a crypto view row (build_crypto_rows) - everything known at detection time."""
     p = {**DEFAULTS, **params}
+    if p["cex_only"] and row.get("venue") != "binance":
+        return False
     trig = set(row["triggers"])
     if p["triggers"] and not trig & set(p["triggers"]):
         return False

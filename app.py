@@ -538,6 +538,7 @@ def build_crypto_rows(cdata: dict, args) -> tuple[list[dict], dict]:
         points = prices.get(e["coin_id"], [])
         perf = crypto.performance(e, points, bench)
         rows.append({**e, "signal": sig, "details": details or {}, "perf": perf,
+                     "venue": ((cdata.get("venues") or {}).get(e["id"]) or {}).get("source"),   # where its candles come from
                      "xtb": xtb.crypto_url(e["coin_id"], e["name"], cdata.get("xtb_crypto") or set()),
                      "news": (cdata.get("news") or {}).get(e["coin_id"], {}).get("items", []),
                      "spark": sparkline(perf["path"]), "mcap": mcap,
@@ -645,7 +646,8 @@ def create_app(store: Store | None = None, scanner: Scanner | None = None,
 
     def crypto_data():
         return {"events": cstore.events(), "prices": cstore.prices(), "coins": cstore.coins(),
-                "weights": cstore.weights(), "xtb_crypto": store.xtb_catalog("crypto"), "news": cstore.news()}
+                "weights": cstore.weights(), "xtb_crypto": store.xtb_catalog("crypto"), "news": cstore.news(),
+                "venues": kstore.sources()}
 
     def common(**extra):
         return {"scanner": scanner, "tracker": tracker, "crypto_scanner": crypto_scanner,

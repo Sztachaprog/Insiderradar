@@ -52,7 +52,7 @@ SAFE_WORST = -0.75 / strategy.LEVERAGE
 def filter_params() -> list[dict]:
     out = []
     for trig, (mc0, mc1), (c0, c1), (s0, s1), (v0, v1) in itertools.product(*FILTERS.values()):
-        p = {}
+        p = {"cex_only": True}                  # leverage, and clean candles, exist only for Binance tokens
         if trig:
             p["triggers"] = trig
         if mc0 or mc1:
@@ -208,6 +208,16 @@ def same_idea(a: dict, b: dict, rows: list[dict]) -> bool:
     if not sa or not sb:
         return strategy.version(a) == strategy.version(b)
     return len(sa & sb) / len(sa | sb) >= SAME_IDEA     # a broad rule merely containing a narrow one is new
+
+
+def upgrade_autos(cstore: crypto.CryptoStore) -> int:
+    """Auto strategies saved before the Binance-only rule get it too."""
+    n = 0
+    for s in cstore.strategies():
+        if s["name"].startswith(AUTO_PREFIX) and not s["params"].get("cex_only"):
+            cstore.update_strategy(s["id"], {**s["params"], "cex_only": True})
+            n += 1
+    return n
 
 
 def drop_duplicate_autos(cstore: crypto.CryptoStore, journal: strategy.Journal, rows: list[dict]) -> list[str]:

@@ -166,3 +166,13 @@ def test_ladder_without_moving_the_stop_and_for_a_short():
 def test_open_ladder_trade_counts_what_was_already_banked():
     t = strategy.simulate(row(), candles((1, 1.0, 1.06, 0.99, 1.04),), LADDER, T0 + timedelta(minutes=5), fee=0)
     assert t["status"] == "open" and t["gross"] == pytest.approx(0.2 * 0.05 + 0.8 * 0.04)
+
+
+
+def test_binance_only_rule():
+    assert strategy.matches({**row(), "venue": "binance"}, {"cex_only": True})
+    assert not strategy.matches({**row(), "venue": "geckoterminal"}, {"cex_only": True})
+    assert not strategy.matches(row(), {"cex_only": True})                 # not resolved yet: not traded
+    assert strategy.matches(row(), {})                                      # the rule is off by default
+    assert all(p["cex_only"] for k, _, _, p in strategy.PRESETS)
+    assert strategy.params_from_form(MultiDict({"cex_only": "1"}))["cex_only"] is True

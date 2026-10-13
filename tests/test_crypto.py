@@ -316,7 +316,9 @@ def test_position_pages(client, tmp_path):
 def test_strategy_results_keep_history_apart_from_live(client, tmp_path):
     cstore = crypto.CryptoStore(tmp_path / "t.db")
     then = crypto.utcnow() - timedelta(days=40)
-    cstore.add_event(coin("old", price=1.0), ["pump24"], then, origin="backfill")   # replayed from Binance history
+    eid = cstore.add_event(coin("old", price=1.0), ["pump24"], then, origin="backfill")   # replayed from Binance history
+    import candles
+    candles.CandleStore(tmp_path / "t.db").set_source(eid, "binance", "OLDUSDT")
     cstore.save_prices("old", [(crypto.iso(then + timedelta(hours=h)), p) for h, p in [(0, 1.0), (2, 1.2)]])
     html = client.get("/krypto/strategie").get_data(as_text=True)
     assert "Test na historii" in html and "1 transakcji · trafność 100%" in html   # the replayed winner

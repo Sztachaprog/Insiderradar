@@ -15,7 +15,8 @@ T0 = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
 
 def row(i=1, at=T0, triggers=("pump24",), score=60, mcap=50e6, ch24=0.3, vol=1.0, base=1.0):
     return {"id": i, "coin_id": f"c{i}", "symbol": "X", "detected_at": crypto.iso(at), "base_price": base,
-            "triggers": list(triggers), "signal": {"score": score}, "mcap": mcap, "ch24": ch24, "vol_ratio": vol}
+            "triggers": list(triggers), "signal": {"score": score}, "mcap": mcap, "ch24": ch24, "vol_ratio": vol,
+            "venue": "binance"}
 
 
 def random_walk(seed, start=T0, minutes=60 * 50, step=1, gap_every=0):

@@ -115,6 +115,7 @@
         <label>Zmiana 24h maks. %<input type="text" name="max_ch24" value="{{ form.max_ch24 }}" placeholder="np. 15"></label>
         <label>Wolumen / kap. min.<input type="text" name="min_vol" value="{{ form.min_vol }}" placeholder="np. 0.6"></label>
         <label>Wolumen / kap. maks.<input type="text" name="max_vol" value="{{ form.max_vol }}" placeholder="np. 2"></label>
+        <label class="check" style="align-self:center" title="dźwignia i czyste dane są tylko dla tokenów z Binance"><input type="checkbox" name="cex_only" value="1" {% if form.cex_only %}checked{% endif %}> tylko tokeny z Binance</label>
         <label>Kierunek<select name="side">{% for key, label in sides.items() %}<option value="{{ key }}" {% if form.side == key %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
         <label>Take-profit %<input type="text" name="tp" value="{{ form.tp }}"></label>
         <label>Stop-loss %<input type="text" name="sl" value="{{ form.sl }}"></label>
